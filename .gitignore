@@ -1,5 +1,6 @@
 # Prerequisites
 *.d
+SDK_CPP/.vscode/
 
 # Compiled Object files
 *.slo
@@ -23,7 +24,6 @@
 *.dll
 *.so.*
 
-
 # Fortran module files
 *.mod
 *.smod
@@ -43,6 +43,7 @@
 build/
 Build/
 build-*/
+SDK_CPP/test/build
 
 # CMake generated files
 CMakeFiles/
@@ -67,3 +68,5 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+*/.cache/
+
