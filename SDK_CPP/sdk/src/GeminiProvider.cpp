@@ -1,54 +1,51 @@
-#include "../include/DeepSeekProvider.hpp"
+#include "../include/GeminiProvider.hpp"
 #include "../include/util/logger.hpp"
 #include <httplib.h>
 #include <jsoncpp/json/json.h>
 #include <jsoncpp/json/reader.h>
 #include <jsoncpp/json/writer.h>
+
 namespace chat_sdk {
-bool DeepSeekProvider::initModel(
+bool GeminiProvider::initModel(
     const std::map<std::string, std::string> &configMap) {
     auto it = configMap.find("api_key");
     if (it == configMap.end()) {
         ERR("api_key is not found in configMap");
         return false;
-    } else {
-        _api_key = it->second;
     }
-
+    _api_key = it->second;
     it = configMap.find("base_url");
-    if (it != configMap.end()) {
-        _endpoint = it->second;
-    } else {
-        _endpoint = "https://api.deepseek.com";
+    if (it == configMap.end()) {
+        ERR("base_url is not found in configMap");
+        return false;
     }
-
+    _endpoint = it->second;
     it = configMap.find("model_name");
-    if (it != configMap.end()) {
-        _modelName = it->second;
-    } else {
-        _modelName = "deepseek-v4-flash";
+    if (it == configMap.end()) {
+        ERR("model_name is not found in configMap");
+        return false;
     }
-
+    _modelName = it->second;
     _isAvailable = true;
-    INFO("DeepSeekProvider initModel success, endpoint: {}", _endpoint);
+    INFO("GeminiProvider initModel success, endpoint: {}", _endpoint);
     return true;
 }
 // 检查模型是否可用
-bool DeepSeekProvider::isAvailable() const { return _isAvailable; }
+bool GeminiProvider::isAvailable() const { return _isAvailable; }
 // 获取模型名称
-std::string DeepSeekProvider::GetModelName() const { return _modelName; }
+std::string GeminiProvider::GetModelName() const { return _modelName; }
 // 获取模型描述
-std::string DeepSeekProvider::GetModelDesc() const {
-    return "由深度求索公司打造的⼀款实用性强、中⽂优化的通用对话助⼿, "
+std::string GeminiProvider::GetModelDesc() const {
+    return "由微软公司打造的⼀款实用性强、中⽂优化的通用对话助⼿, "
            "适合日常问答与创作。";
 }
 // 发送消息 - 全量返回
-std::string DeepSeekProvider::sendMessage(
-    const std::vector<Message> &messages,
-    const std::map<std::string, std::string> &params) {
+std::string
+GeminiProvider::sendMessage(const std::vector<Message> &messages,
+                            const std::map<std::string, std::string> &params) {
 
     if (!_isAvailable) {
-        ERR("DeepSeekProvider is not available");
+        ERR("GeminiProvider is not available");
         return "";
     }
 
@@ -102,20 +99,20 @@ std::string DeepSeekProvider::sendMessage(
                                 {"Content-Type", "application/json"}};
 
     // 发送POST请求
-    auto resp =
-        client.Post("/api/chat", headers, request_str, "application/json");
+    auto resp = client.Post("/v1beta/openai/chat/completions", headers,
+                            request_str, "application/json");
     if (!resp) {
         ERR("httplib::Post failed");
-        return "DeepSeek response error";
+        return "Gemini response error";
     }
 
-    INFO("DeepSeekProvider sendMessage response body: {}", resp->body);
+    INFO("GeminiProvider sendMessage response body: {}", resp->body);
 
     if (resp->status != 200) {
         ERR("httplib::Post failed, status: {}", resp->status);
-        return "DeepSeek response status error";
+        return "Gemini response status error";
     }
-    INFO("DeepSeekProvider sendMessage response status: {}", resp->status);
+    INFO("GeminiProvider sendMessage response status: {}", resp->status);
 
     // 解析响应体
     Json::CharReaderBuilder reader;
@@ -125,41 +122,41 @@ std::string DeepSeekProvider::sendMessage(
     // 如果解析失败，返回错误
     if (!Json::parseFromStream(reader, iss, &response, &parseError)) {
         ERR("Json::parseFromStream failed, error: {}", parseError);
-        return "DeepSeek response content parse error";
+        return "Gemini response content parse error";
     }
     // 如果choices字段不存在或者不是数组类型，返回错误
     if (!response.isMember("choices") || !response["choices"].isArray()) {
         ERR("Json::parseFromStream failed, choices is not array type");
-        return "DeepSeek response content parse error";
+        return "Gemini response content parse error";
     }
     // 如果choices的数组没有message字段或者message字段不是对象类型，返回错误
     if (!response["choices"][0].isMember("message") ||
         !response["choices"][0]["message"].isObject()) {
         ERR("Json::parseFromStream failed, choices[0].message is not object "
             "type");
-        return "DeepSeek response content parse error";
+        return "Gemini response content parse error";
     }
     // 如果choices的数组没有message.content字段或者message.content字段不是字符串类型，返回错误
     if (!response["choices"][0]["message"].isMember("content") ||
         !response["choices"][0]["message"]["content"].isString()) {
         ERR("Json::parseFromStream failed, choices[0].message.content is not "
             "exist or not string type");
-        return "DeepSeek response content parse error";
+        return "Gemini response content parse error";
     }
     // 提取回复内容
     std::string replyContent =
         response["choices"][0]["message"]["content"].asString();
-    INFO("DeepSeekProvider sendMessage response content: {}", replyContent);
+    INFO("GeminiProvider sendMessage response content: {}", replyContent);
     return replyContent;
 }
 // 发送消息 - 流式返回
-std::string DeepSeekProvider::sendMessageStream(
+std::string GeminiProvider::sendMessageStream(
     const std::vector<Message> &messages,
     const std::map<std::string, std::string> &params,
     std::function<void(const std::string &, bool)> callback) {
     if (!_isAvailable) {
-        ERR("DeepSeekProvider is not available");
-        return "DeepSeekProvider ERROR";
+        ERR("GeminiProvider is not available");
+        return "GeminiProvider ERROR";
     }
 
     // 历史消息
@@ -204,7 +201,7 @@ std::string DeepSeekProvider::sendMessageStream(
     // 序列化
     Json::StreamWriterBuilder writer;
     std::string json_string = Json::writeString(writer, request);
-    INFO("DeepSeekProvider sendMessageStream request body: {}", json_string);
+    INFO("GeminiProvider sendMessageStream request body: {}", json_string);
 
     // 流式处理的变量
     std::string replyContent = "";    // 接受流式内容的缓冲区
@@ -216,7 +213,7 @@ std::string DeepSeekProvider::sendMessageStream(
 
     // 创建请求对象
     httplib::Request req;
-    req.path = "/api/chat";
+    req.path = "/chat/completions";
     req.body = json_string;
     req.headers = headers;
     req.method = "POST";
@@ -227,10 +224,10 @@ std::string DeepSeekProvider::sendMessageStream(
         if (statusCode != 200) {
             gotError = true;
             errorContent =
-                "DeepSeekProvider sendMessageStream response status error: " +
+                "GeminiProvider sendMessageStream response status error: " +
                 std::to_string(statusCode);
 
-            ERR("DeepSeekProvider sendMessageStream response status error: {}",
+            ERR("GeminiProvider sendMessageStream response status error: {}",
                 statusCode);
             return false;
         }
@@ -244,14 +241,14 @@ std::string DeepSeekProvider::sendMessageStream(
             return false;
         }
         replyContent.append(data, size);
-        // DBG("DeepSeekProvider sendMessageStream response body: {}",
+        // DBG("GeminiProvider sendMessageStream response body: {}",
         //     replyContent);
         int pos = 0;
         while ((pos = replyContent.find("\n\n")) != std::string::npos) {
 
             // 接受一个chunk内容
             std::string chunk = replyContent.substr(0, pos);
-            DBG("DeepSeekProvider sendMessageStream response chunk: {}", chunk);
+            DBG("GeminiProvider sendMessageStream response chunk: {}", chunk);
             replyContent.erase(0, pos + 2);
             pos = 0;
             // 处理空⾏和注释, 以:开头的是注释⾏
@@ -264,7 +261,7 @@ std::string DeepSeekProvider::sendMessageStream(
                 std::string jsonStr = chunk.substr(6);
                 // 处理结束标记
                 if (jsonStr == "[DONE]") {
-                    INFO("DeepSeekProvider sendMessageStream stream finished");
+                    INFO("GeminiProvider sendMessageStream stream finished");
                     streamFinished = true;
                     return true;
                 }
@@ -276,7 +273,7 @@ std::string DeepSeekProvider::sendMessageStream(
                 std::istringstream iss(jsonStr);
                 // 解析失败，打印错误信息
                 if (!Json::parseFromStream(reader, iss, &response, &errorMsg)) {
-                    ERR("DeepSeekProvider sendMessageStream parse JSON error: "
+                    ERR("GeminiProvider sendMessageStream parse JSON error: "
                         "{}",
                         errorMsg);
                     return false;
@@ -285,7 +282,7 @@ std::string DeepSeekProvider::sendMessageStream(
                 // 如果choices字段不存在或者不是数组类型，返回错误
                 if (!response.isMember("choices") ||
                     !response["choices"].isArray()) {
-                    ERR("ChatGPTProvider sendMessageStream parse JSON error, "
+                    ERR("GeminiProvider sendMessageStream parse JSON error, "
                         "choices is not array "
                         "type");
                     return false;
@@ -308,7 +305,7 @@ std::string DeepSeekProvider::sendMessageStream(
                 // 提取回复内容
                 std::string Content =
                     response["choices"][0]["delta"]["content"].asString();
-                INFO("DeepSeekProvider sendMessageStream response content: {}",
+                INFO("GeminiProvider sendMessageStream response content: {}",
                      Content);
                 responseContent += Content;
 
@@ -327,19 +324,18 @@ std::string DeepSeekProvider::sendMessageStream(
 
     // 若返回值为空，可能是因为网络问题、DNS解析失败等情况，导致请求失败
     if (!response) {
-        ERR("DeepSeekProvider sendMessageStream send request failed, please "
+        ERR("GeminiProvider sendMessageStream send request failed, please "
             "check network connection");
         return "";
     }
 
     // 确保流式操作正常处理
     if (!streamFinished) {
-        WARN("DeepSeekProvider sendMessageStream stream not finished");
+        WARN("GeminiProvider sendMessageStream stream not finished");
         callback("", true);
     }
-    DBG("DeepSeekProvider sendMessageStream response content: {}",
+    DBG("GeminiProvider sendMessageStream response content: {}",
         responseContent);
     return responseContent;
 };
-
 } // namespace chat_sdk

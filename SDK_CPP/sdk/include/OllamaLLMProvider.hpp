@@ -1,10 +1,10 @@
 #include "LLMProvider.hpp"
 
 namespace chat_sdk {
-class DeepSeekProvider : public LLMProvider {
+class OllamaLLMProvider : public LLMProvider {
   public:
-    DeepSeekProvider() = default;
-    ~DeepSeekProvider() = default;
+    OllamaLLMProvider() = default;
+    ~OllamaLLMProvider() = default;
     // 初始化模型
     bool
     initModel(const std::map<std::string, std::string> &configMap) override;
@@ -14,6 +14,8 @@ class DeepSeekProvider : public LLMProvider {
     std::string GetModelName() const override;
     // 获取模型描述
     std::string GetModelDesc() const override;
+    // 获取模型端点
+    std::string GetEndpoint() const;
     // 发送消息 - 全量返回
     std::string
     sendMessage(const std::vector<Message> &messages,
@@ -23,5 +25,10 @@ class DeepSeekProvider : public LLMProvider {
         const std::vector<Message> &messages,
         const std::map<std::string, std::string> &params,
         std::function<void(const std::string &, bool)> callback) override;
+
+  private:
+    std::string _modelName;
+    std::string _modelDesc;
+    std::string _endpoint;
 };
 } // namespace chat_sdk

@@ -9,7 +9,7 @@ namespace chat_sdk {
 class LLMProvider {
   public:
     // 初始化模型
-    virtual void
+    virtual bool
     initModel(const std::map<std::string, std::string> &configMap) = 0;
     // 检查模型是否可用
     virtual bool isAvailable() const = 0;

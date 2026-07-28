@@ -1,11 +1,13 @@
-#include "../include/DeepSeekProvider.hpp"
+#include "../include/ChatGPTProvider.hpp"
 #include "../include/util/logger.hpp"
 #include <httplib.h>
 #include <jsoncpp/json/json.h>
 #include <jsoncpp/json/reader.h>
 #include <jsoncpp/json/writer.h>
+#include <sstream>
+
 namespace chat_sdk {
-bool DeepSeekProvider::initModel(
+bool ChatGPTProvider::initModel(
     const std::map<std::string, std::string> &configMap) {
     auto it = configMap.find("api_key");
     if (it == configMap.end()) {
@@ -19,49 +21,49 @@ bool DeepSeekProvider::initModel(
     if (it != configMap.end()) {
         _endpoint = it->second;
     } else {
-        _endpoint = "https://api.deepseek.com";
+        _endpoint = "https://api.openai.com";
     }
 
     it = configMap.find("model_name");
     if (it != configMap.end()) {
         _modelName = it->second;
     } else {
-        _modelName = "deepseek-v4-flash";
+        _modelName = "gpt-3.5-turbo";
     }
 
     _isAvailable = true;
-    INFO("DeepSeekProvider initModel success, endpoint: {}", _endpoint);
+    INFO("ChatGPTProvider initModel success, endpoint: {}", _endpoint);
     return true;
 }
 // 检查模型是否可用
-bool DeepSeekProvider::isAvailable() const { return _isAvailable; }
+bool ChatGPTProvider::isAvailable() const { return _isAvailable; }
 // 获取模型名称
-std::string DeepSeekProvider::GetModelName() const { return _modelName; }
+std::string ChatGPTProvider::GetModelName() const { return _modelName; }
 // 获取模型描述
-std::string DeepSeekProvider::GetModelDesc() const {
-    return "由深度求索公司打造的⼀款实用性强、中⽂优化的通用对话助⼿, "
+std::string ChatGPTProvider::GetModelDesc() const {
+    return "由OpenAI公司打造的⼀款实用性强、中⽂优化的通用对话助⼿, "
            "适合日常问答与创作。";
 }
 // 发送消息 - 全量返回
-std::string DeepSeekProvider::sendMessage(
-    const std::vector<Message> &messages,
-    const std::map<std::string, std::string> &params) {
+std::string
+ChatGPTProvider::sendMessage(const std::vector<Message> &messages,
+                             const std::map<std::string, std::string> &params) {
 
     if (!_isAvailable) {
-        ERR("DeepSeekProvider is not available");
+        ERR("ChatGPTProvider is not available");
         return "";
     }
 
     double temperature = 0.7;
-    long max_tokens = 2048;
+    long max_input_tokens = 2048;
 
     auto it = params.find("temperature");
     if (it != params.end()) {
         temperature = std::stod(it->second);
     }
-    it = params.find("max_tokens");
+    it = params.find("max_input_tokens");
     if (it != params.end()) {
-        max_tokens = std::stoi(it->second);
+        max_input_tokens = std::stoi(it->second);
     }
 
     // 构造历史消息
@@ -76,9 +78,9 @@ std::string DeepSeekProvider::sendMessage(
     // 构造请求体
     Json::Value request(Json::objectValue);
     request["model"] = _modelName;
-    request["messages"] = Message_Array;
+    request["input"] = Message_Array;
     request["temperature"] = temperature;
-    request["max_tokens"] = max_tokens;
+    request["max_input_tokens"] = max_input_tokens;
     request["stream"] = false;
 
     // 序列化请求体
@@ -98,24 +100,23 @@ std::string DeepSeekProvider::sendMessage(
     client.set_read_timeout(60, 0);       // 设置读取60秒超时
 
     // 设置请求头
-    httplib::Headers headers = {{"Authorization", "Bearer " + _api_key},
-                                {"Content-Type", "application/json"}};
+    httplib::Headers headers = {{"Authorization", "Bearer " + _api_key}};
 
     // 发送POST请求
     auto resp =
-        client.Post("/api/chat", headers, request_str, "application/json");
+        client.Post("/v1/responses", headers, request_str, "application/json");
     if (!resp) {
         ERR("httplib::Post failed");
-        return "DeepSeek response error";
+        return "ChatGPT response error";
     }
 
-    INFO("DeepSeekProvider sendMessage response body: {}", resp->body);
+    INFO("ChatGPTProvider sendMessage response body: {}", resp->body);
 
     if (resp->status != 200) {
         ERR("httplib::Post failed, status: {}", resp->status);
-        return "DeepSeek response status error";
+        return "ChatGPT response status error";
     }
-    INFO("DeepSeekProvider sendMessage response status: {}", resp->status);
+    INFO("ChatGPTProvider sendMessage response status: {}", resp->status);
 
     // 解析响应体
     Json::CharReaderBuilder reader;
@@ -125,41 +126,41 @@ std::string DeepSeekProvider::sendMessage(
     // 如果解析失败，返回错误
     if (!Json::parseFromStream(reader, iss, &response, &parseError)) {
         ERR("Json::parseFromStream failed, error: {}", parseError);
-        return "DeepSeek response content parse error";
+        return "ChatGPT response content parse error";
     }
-    // 如果choices字段不存在或者不是数组类型，返回错误
-    if (!response.isMember("choices") || !response["choices"].isArray()) {
-        ERR("Json::parseFromStream failed, choices is not array type");
-        return "DeepSeek response content parse error";
+    // 如果output字段不存在或者不是数组类型，返回错误
+    if (!response.isMember("output") || !response["output"].isArray()) {
+        ERR("Json::parseFromStream failed, output is not array type");
+        return "ChatGPT response content parse error";
     }
-    // 如果choices的数组没有message字段或者message字段不是对象类型，返回错误
-    if (!response["choices"][0].isMember("message") ||
-        !response["choices"][0]["message"].isObject()) {
-        ERR("Json::parseFromStream failed, choices[0].message is not object "
+    // 如果output的数组没有content字段或者content字段不是对象类型，返回错误
+    if (!response["output"].isMember("content") ||
+        !response["output"]["content"].isObject()) {
+        ERR("Json::parseFromStream failed, output.content is not object "
             "type");
-        return "DeepSeek response content parse error";
+        return "ChatGPT response content parse error";
     }
-    // 如果choices的数组没有message.content字段或者message.content字段不是字符串类型，返回错误
-    if (!response["choices"][0]["message"].isMember("content") ||
-        !response["choices"][0]["message"]["content"].isString()) {
-        ERR("Json::parseFromStream failed, choices[0].message.content is not "
-            "exist or not string type");
-        return "DeepSeek response content parse error";
+    // 如果output的数组没有content字段或者content字段不是字符串类型，返回错误
+    if (!response["output"]["content"][0].isMember("text") ||
+        !response["output"]["content"][0]["text"].isString()) {
+        ERR("Json::parseFromStream failed, output.content.text is not exist or "
+            "not string type");
+        return "ChatGPT response content parse error";
     }
     // 提取回复内容
     std::string replyContent =
-        response["choices"][0]["message"]["content"].asString();
-    INFO("DeepSeekProvider sendMessage response content: {}", replyContent);
+        response["output"]["content"][0]["text"].asString();
+    INFO("ChatGPTProvider sendMessage response content: {}", replyContent);
     return replyContent;
 }
 // 发送消息 - 流式返回
-std::string DeepSeekProvider::sendMessageStream(
+std::string ChatGPTProvider::sendMessageStream(
     const std::vector<Message> &messages,
     const std::map<std::string, std::string> &params,
     std::function<void(const std::string &, bool)> callback) {
     if (!_isAvailable) {
-        ERR("DeepSeekProvider is not available");
-        return "DeepSeekProvider ERROR";
+        ERR("ChatGPTProvider is not available");
+        return "ChatGPTProvider ERROR";
     }
 
     // 历史消息
@@ -189,12 +190,11 @@ std::string DeepSeekProvider::sendMessageStream(
     request["model"] = model;
     request["messages"] = Message_Array;
     request["temperature"] = temperature;
-    request["max_tokens"] = max_tokens;
+    request["max_output_tokens"] = max_tokens;
     request["stream"] = true;
 
     // 构造请求头
     httplib::Headers headers = {{"Authorization", "Bearer " + _api_key},
-                                {"Content-Type", "application/json"},
                                 {"Accept", "text/event-stream"}};
     // 构造客户端
     httplib::Client client(_endpoint.c_str());
@@ -207,16 +207,16 @@ std::string DeepSeekProvider::sendMessageStream(
     INFO("DeepSeekProvider sendMessageStream request body: {}", json_string);
 
     // 流式处理的变量
-    std::string replyContent = "";    // 接受流式内容的缓冲区
+    std::string replyContent = "";    // 接受流式内容
     bool gotError = false;            // 是否收到错误信息
     std::string errorContent = "";    // 错误内容
-    std::string responseContent = ""; // 完整响应内容
+    std::string responseContent = ""; // 响应内容
     int statusCode = 0;               // 响应状态码
     bool streamFinished = false;      // 流式响应是否完成
 
     // 创建请求对象
     httplib::Request req;
-    req.path = "/api/chat";
+    req.path = "/v1/responses";
     req.body = json_string;
     req.headers = headers;
     req.method = "POST";
@@ -225,11 +225,6 @@ std::string DeepSeekProvider::sendMessageStream(
     req.response_handler = [&](const httplib::Response &resp) {
         statusCode = resp.status;
         if (statusCode != 200) {
-            gotError = true;
-            errorContent =
-                "DeepSeekProvider sendMessageStream response status error: " +
-                std::to_string(statusCode);
-
             ERR("DeepSeekProvider sendMessageStream response status error: {}",
                 statusCode);
             return false;
@@ -243,77 +238,64 @@ std::string DeepSeekProvider::sendMessageStream(
         if (gotError) {
             return false;
         }
-        replyContent.append(data, size);
-        // DBG("DeepSeekProvider sendMessageStream response body: {}",
+        replyContent += std::string(data, size);
+        // DBG("ChatGPTProvider sendMessageStream response body: {}",
         //     replyContent);
         int pos = 0;
         while ((pos = replyContent.find("\n\n")) != std::string::npos) {
 
             // 接受一个chunk内容
             std::string chunk = replyContent.substr(0, pos);
-            DBG("DeepSeekProvider sendMessageStream response chunk: {}", chunk);
+            DBG("ChatGPTProvider sendMessageStream response chunk: {}", chunk);
             replyContent.erase(0, pos + 2);
-            pos = 0;
-            // 处理空⾏和注释, 以:开头的是注释⾏
-            if (chunk.empty() || chunk[0] == ':') {
-                continue;
+            // 解析chunk内容
+            Json::Value chunkJson;
+            Json::CharReaderBuilder reader;
+            std::string errorMsg;
+            std::istringstream chunkStream(chunk);
+            if (!Json::parseFromStream(reader, chunkStream, &chunkJson,
+                                       &errorMsg)) {
+                ERR("Json::parseFromStream failed, chunk is not valid JSON, "
+                    "error: {}",
+                    errorMsg);
+                return false;
             }
 
-            // 检查事件类型
-            if (chunk.compare(0, 6, "data: ") == 0) {
-                std::string jsonStr = chunk.substr(6);
-                // 处理结束标记
-                if (jsonStr == "[DONE]") {
-                    INFO("DeepSeekProvider sendMessageStream stream finished");
-                    streamFinished = true;
-                    return true;
+            std::istringstream eventStream(chunk);
+            std::string line = "";
+            std::string eventType = "";
+            std::string eventData = "";
+            // 循环处理时间类型和内容
+            while (std::getline(eventStream, line)) {
+                if (line.compare(0, 5, "data:") == 0) {
+                    eventData = line.substr(6);
+                } else if (line.compare(0, 6, "event: ") == 0) {
+                    eventType = line.substr(7);
                 }
+            }
 
-                // 解析JSON字符串
-                Json::Value response;
-                Json::CharReaderBuilder reader;
-                std::string errorMsg;
-                std::istringstream iss(jsonStr);
-                // 解析失败，打印错误信息
-                if (!Json::parseFromStream(reader, iss, &response, &errorMsg)) {
-                    ERR("DeepSeekProvider sendMessageStream parse JSON error: "
-                        "{}",
-                        errorMsg);
-                    return false;
+            // 分别处理不同类型的事件
+            if (eventType == "response.output_text.delta") {
+                if (chunkJson.isMember("delta") &&
+                    chunkJson["delta"].isString()) {
+                    std::string delta = chunkJson["delta"].asString();
+                    callback(delta, false);
                 }
-
-                // 如果choices字段不存在或者不是数组类型，返回错误
-                if (!response.isMember("choices") ||
-                    !response["choices"].isArray()) {
-                    ERR("ChatGPTProvider sendMessageStream parse JSON error, "
-                        "choices is not array "
-                        "type");
-                    return false;
+            } else if (eventType == "response.output_item.done") {
+                if (chunkJson.isMember("item") &&
+                    chunkJson["item"].isObject() &&
+                    chunkJson["item"].isMember("content") &&
+                    chunkJson["item"]["content"].isArray() &&
+                    chunkJson["item"]["content"].empty() &&
+                    chunkJson["item"]["content"][0].isMember("text") &&
+                    chunkJson["item"]["content"][0]["text"].isString()) {
+                    responseContent +=
+                        chunkJson["item"]["content"][0]["text"].asString();
                 }
-                // 如果choices的数组没有message字段或者message字段不是对象类型，返回错误
-                if (!response["choices"][0].isMember("delta") ||
-                    !response["choices"][0]["delta"].isObject()) {
-                    ERR("Json::parseFromStream failed, choices[0].delta is "
-                        "not object "
-                        "type");
-                    return false;
-                }
-                // 如果choices的数组没有delta.content字段，返回错误
-                if (!response["choices"][0]["delta"].isMember("content")) {
-                    ERR("Json::parseFromStream failed, "
-                        "choices[0].delta.content is not "
-                        "exist or not string type");
-                    return false;
-                }
-                // 提取回复内容
-                std::string Content =
-                    response["choices"][0]["delta"]["content"].asString();
-                INFO("DeepSeekProvider sendMessageStream response content: {}",
-                     Content);
-                responseContent += Content;
-
-                // 调用回调函数, 将模型返回的数据给用户
-                callback(Content, streamFinished);
+            } else if (eventType == "response.completed") {
+                streamFinished = true;
+                callback("", true);
+                return true;
             }
         }
         return true;
@@ -327,17 +309,17 @@ std::string DeepSeekProvider::sendMessageStream(
 
     // 若返回值为空，可能是因为网络问题、DNS解析失败等情况，导致请求失败
     if (!response) {
-        ERR("DeepSeekProvider sendMessageStream send request failed, please "
+        ERR("ChatGPTProvider sendMessageStream send request failed, please "
             "check network connection");
         return "";
     }
 
     // 确保流式操作正常处理
     if (!streamFinished) {
-        WARN("DeepSeekProvider sendMessageStream stream not finished");
+        WARN("ChatGPTProvider sendMessageStream stream not finished");
         callback("", true);
     }
-    DBG("DeepSeekProvider sendMessageStream response content: {}",
+    DBG("ChatGPTProvider sendMessageStream response content: {}",
         responseContent);
     return responseContent;
 };

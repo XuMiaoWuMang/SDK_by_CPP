@@ -1,10 +1,10 @@
 #include "LLMProvider.hpp"
 
 namespace chat_sdk {
-class DeepSeekProvider : public LLMProvider {
+class GeminiProvider : public LLMProvider {
   public:
-    DeepSeekProvider() = default;
-    ~DeepSeekProvider() = default;
+    GeminiProvider() = default;
+    ~GeminiProvider() = default;
     // 初始化模型
     bool
     initModel(const std::map<std::string, std::string> &configMap) override;
