@@ -1,3 +1,5 @@
+#pragma once
+#include "DataManager.hpp"
 #include "common.hpp"
 #include <atomic>
 #include <memory>
@@ -6,19 +8,19 @@
 namespace chat_sdk {
 class SessionManager {
   public:
+    SessionManager(const std::string &dbName = "chatDB.db");
     // 创建会话
     std::string createSession(const std::string &modelName);
     // 获取会话信息
-    std::shared_ptr<SessionInfo>
-    getSessionInfo(const std::string &sessionId) const;
+    std::shared_ptr<SessionInfo> getSessionInfo(const std::string &sessionId);
     // 向指定会话添加消息
     bool addMessage(const std::string &sessionId, const Message &message);
     // 获取指定会话的历史消息
-    std::vector<Message> getMessages(const std::string &sessionId) const;
+    std::vector<Message> getMessages(const std::string &sessionId);
     // 更新时间戳
     void updateTimestamp(const std::string &sessionId);
     // 获取会话列表
-    std::vector<std::string> getSessionIds() const;
+    std::vector<std::string> getSessionIds();
     // 删除会话
     bool deleteSession(const std::string &sessionId);
     // 清空所有会话
@@ -38,5 +40,6 @@ class SessionManager {
         _mutex; // mutable
                 // 可以让锁即使在const成员函数中，也能被修改(加锁和释放锁)
     std::atomic<int64_t> _sessionIdCounter = {0};
+    DataManager _dataManager;
 };
 } // namespace chat_sdk

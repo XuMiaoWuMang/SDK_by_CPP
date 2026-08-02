@@ -102,8 +102,8 @@ std::string DeepSeekProvider::sendMessage(
                                 {"Content-Type", "application/json"}};
 
     // 发送POST请求
-    auto resp =
-        client.Post("/api/chat", headers, request_str, "application/json");
+    auto resp = client.Post("/chat/completions", headers, request_str,
+                            "application/json");
     if (!resp) {
         ERR("httplib::Post failed");
         return "DeepSeek response error";
@@ -216,7 +216,7 @@ std::string DeepSeekProvider::sendMessageStream(
 
     // 创建请求对象
     httplib::Request req;
-    req.path = "/api/chat";
+    req.path = "/chat/completions";
     req.body = json_string;
     req.headers = headers;
     req.method = "POST";

@@ -9,7 +9,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # 设置构建类型
 set(CMAKE_BUILD_TYPE Debug)
 # 添加可执行文件
-add_executable(testLLM testLLM.cpp ../sdk/src/OllamaLLMProvider.cpp ../sdk/src/DeepSeekProvider.cpp ../sdk/src/ChatGPTProvider.cpp ../sdk/src/util/logger.cpp )
+add_executable(testLLM testLLM.cpp 
+../sdk/src/ChatSDK.cpp 
+../sdk/src/ChatGPTProvider.cpp 
+../sdk/src/OllamaLLMProvider.cpp 
+../sdk/src/DeepSeekProvider.cpp 
+../sdk/src/DataManager.cpp
+../sdk/src/SessionManager.cpp
+../sdk/src/LLMManager.cpp
+../sdk/src/GeminiProvider.cpp
+../sdk/src/OllamaLLMProvider.cpp
+../sdk/src/util/logger.cpp
+../sdk/src/SessionManager.cpp
+ )
 # 设置输出目录
 set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR})
 # 添加头文件的搜索路径
@@ -23,4 +35,4 @@ include_directories(${OPENSSL_INCLUDE_DIR})
 find_package(spdlog REQUIRED)
 include_directories(${SPDLOG_INCLUDE_DIR})
 # 添加链接库
-target_link_libraries(testLLM gtest jsoncpp spdlog fmt OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(testLLM gtest jsoncpp spdlog fmt OpenSSL::SSL OpenSSL::Crypto sqlite3)

@@ -7,7 +7,7 @@ namespace chat_sdk {
 // 消息结构
 class Message {
   public:
-    Message(const std::string &role, const std::string &content)
+    Message(const std::string &role = "", const std::string &content = "")
         : _messageId(std::to_string(std::time(nullptr))), _role(role),
           _sendTimeTimestamp(std::time(nullptr)), _content(content) {}
 
@@ -20,18 +20,23 @@ class Message {
 
 // 公共配置参数
 struct Config {
-    std::string _modelName;    // 模型名称
-    double _temperature = 0.7; // 温度参数
-    int _maxTokens = 2048;     // 最大token数
+    std::string _modelName;      // 模型名称
+    double _temperature = 0.7;   // 温度参数
+    int _maxTokens = 2048;       // 最大token数
+    std::string _modelDesc;      // 模型描述
+    virtual ~Config() = default; // 为了dynamic继承区分不同类型所配置的虚函数
 };
 
 // 远端模型需要api key
 struct RemoteConfig : Config {
     std::string _apiKey; // API key
+    RemoteConfig() = default;
 };
 
 // 本地Ollama模型不需要api key
-
+struct OllamaConfig : Config {
+    std::string _endpoint; // 模型端点 (base url)
+};
 // LLM大语言模型信息结构
 struct ModelInfo {
     std::string _modelName;    // 模型名称
@@ -55,5 +60,6 @@ struct SessionInfo {
     std::time_t _lastUpdateTimeTimestamp; // 最后更新时间戳，单位为秒
 
     SessionInfo(const std::string &_modelName) : _modelName(_modelName) {}
+    SessionInfo() = default;
 };
 } // namespace chat_sdk

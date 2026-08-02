@@ -1,3 +1,5 @@
+#pragma once
+
 #include "LLMProvider.hpp"
 
 namespace chat_sdk {
