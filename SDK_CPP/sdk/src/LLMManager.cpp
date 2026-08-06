@@ -36,11 +36,11 @@ bool LLMManager::initModel(
     return isInit;
 }
 // 获取可用模型
-std::vector<std::string> LLMManager::getAvailableModels() const {
-    std::vector<std::string> availableModels;
+std::vector<ModelInfo> LLMManager::getAvailableModels() const {
+    std::vector<ModelInfo> availableModels;
     for (const auto &model : _modelInfos) {
         if (model.second._isAvailable) {
-            availableModels.push_back(model.first);
+            availableModels.push_back(model.second);
         }
     }
     return availableModels;

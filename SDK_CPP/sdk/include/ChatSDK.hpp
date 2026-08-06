@@ -13,11 +13,11 @@ class ChatSDK {
     // 删除会话
     bool deleteSession(const std::string &sessionId);
     // 获取会话列表
-    std::vector<std::string> getSessionList();
+    std::vector<std::shared_ptr<SessionInfo>> getSessionList();
     // 获取指定会话
     std::shared_ptr<SessionInfo> getSession(const std::string &sessionId);
     // 获取可用的模型列表
-    std::vector<std::string> getModelList();
+    std::vector<ModelInfo> getModelList();
     // 发送消息
     std::string sendMessage(const std::string &sessionId,
                             const std::string &message);

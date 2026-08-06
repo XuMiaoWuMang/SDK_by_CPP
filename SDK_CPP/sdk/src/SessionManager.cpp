@@ -1,7 +1,6 @@
 #include "../include/SessionManager.hpp"
 #include "../include/util/logger.hpp"
 #include <sstream>
-#include <type_traits>
 namespace chat_sdk {
 SessionManager::SessionManager(const std::string &dbName)
     : _dataManager(dbName) {
@@ -39,19 +38,21 @@ std::string SessionManager::generateMessageId(const int64_t messageCount) {
 }
 // 创建会话
 std::string SessionManager::createSession(const std::string &modelName) {
-    // 加锁
-    _mutex.lock();
+
     // 生成新的会话ID
     std::string sessionId = generateSessionId();
-    // 初始化会话信息
     auto sessionIfo = std::make_shared<SessionInfo>(modelName);
-    sessionIfo->_sessionId = sessionId;
-    sessionIfo->_createTimeTimestamp = std::time(nullptr);
-    sessionIfo->_lastUpdateTimeTimestamp = std::time(nullptr);
-    // 存储会话信息
-    _sessions[sessionId] = sessionIfo;
-    // 解锁
-    _mutex.unlock();
+
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        // 初始化会话信息
+        sessionIfo->_sessionId = sessionId;
+        sessionIfo->_createTimeTimestamp = std::time(nullptr);
+        sessionIfo->_lastUpdateTimeTimestamp = std::time(nullptr);
+        // 存储会话信息
+        _sessions[sessionId] = sessionIfo;
+    }
+
     // 存储会话信息到数据库
     _dataManager.InsertSession(*sessionIfo);
     INFO("create session: {}, modelName: {}", sessionId, modelName);
@@ -60,30 +61,25 @@ std::string SessionManager::createSession(const std::string &modelName) {
 // 获取会话信息
 std::shared_ptr<SessionInfo>
 SessionManager::getSessionInfo(const std::string &sessionId) {
-    // 加锁
-    _mutex.lock();
+    std::lock_guard<std::mutex> lock(_mutex);
 
     // 检查会话是否在内存中存在
     auto it = _sessions.find(sessionId);
     if (it != _sessions.end()) {
         // 获取messages信息
-        _mutex.unlock();
+
         it->second->_messages = _dataManager.GetAllMessages(sessionId);
         return it->second;
     }
 
-    _mutex.unlock();
     // 检查会话是否在数据库中存在
     auto sessionIfo = _dataManager.GetSession(sessionId);
     if (sessionIfo != nullptr) {
-        // 加锁
-        _mutex.lock();
         auto it = _sessions.find(sessionId);
         if (it == _sessions.end()) {
             _sessions[sessionId] = sessionIfo;
         }
-        // 解锁
-        _mutex.unlock();
+
         sessionIfo->_messages = _dataManager.GetAllMessages(sessionId);
         return sessionIfo;
     }
@@ -120,27 +116,23 @@ bool SessionManager::addMessage(const std::string &sessionId,
 }
 // 获取指定会话的历史消息
 std::vector<Message> SessionManager::getMessages(const std::string &sessionId) {
-    _mutex.lock();
+    std::lock_guard<std::mutex> lock(_mutex);
     // 检查会话是否在内存中存在
     auto sessionIfo = _sessions.find(sessionId);
     if (sessionIfo != _sessions.end()) {
         // 解锁
-        _mutex.unlock();
         INFO("get messages count: {}", sessionIfo->second->_messages.size());
         return sessionIfo->second->_messages;
     }
 
-    _mutex.unlock();
     // 若不存在，则查找数据库中的消息
     auto messages = _dataManager.GetAllMessages(sessionId);
     if (!messages.empty()) {
-        _mutex.lock();
         for (auto &msg : messages) {
             sessionIfo->second->_messages.push_back(msg);
             INFO("get messages count: {}",
                  sessionIfo->second->_messages.size());
         }
-        _mutex.unlock();
     }
 
     ERR("not found messages in session: {}", sessionId);
@@ -162,48 +154,55 @@ void SessionManager::updateTimestamp(const std::string &sessionId) {
         sessionId, sessionIfo->second->_lastUpdateTimeTimestamp);
 }
 // 获取会话列表
-std::vector<std::string> SessionManager::getSessionIds() {
+std::vector<std::shared_ptr<SessionInfo>> SessionManager::getSessionList() {
     auto sessions = _dataManager.GetAllSessions();
-
-    std::lock_guard<std::mutex> lock(_mutex);
+    for (auto &it : sessions) {
+        it->_messages = _dataManager.GetAllMessages(it->_sessionId);
+    }
     // 将所有会话DI按更新时间戳降序排序
 
     // 获取所有会话ID
     std::vector<std::pair<std::time_t, std::shared_ptr<SessionInfo>>>
         sessionIds;
-    sessionIds.reserve(_sessions.size());
-    for (const auto &it : _sessions) {
-        sessionIds.push_back({it.second->_lastUpdateTimeTimestamp, it.second});
-    }
-    // 合并数据库中的会话
-    for (const auto &it : sessions) {
-        if (_sessions.find(it->_sessionId) == _sessions.end()) {
-            sessionIds.push_back({it->_lastUpdateTimeTimestamp, it});
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+
+        sessionIds.reserve(_sessions.size());
+        for (const auto &it : _sessions) {
+            sessionIds.push_back(
+                {it.second->_lastUpdateTimeTimestamp, it.second});
         }
+        // 合并数据库中的会话
+        for (const auto &it : sessions) {
+            if (_sessions.find(it->_sessionId) == _sessions.end()) {
+                sessionIds.push_back({it->_lastUpdateTimeTimestamp, it});
+            }
+        }
+        // 按更新时间戳降序排序
+        std::sort(
+            sessionIds.begin(), sessionIds.end(),
+            [](const auto &a, const auto &b) { return a.first > b.first; });
     }
-    // 按更新时间戳降序排序
-    std::sort(sessionIds.begin(), sessionIds.end(),
-              [](const auto &a, const auto &b) { return a.first > b.first; });
     // 提取会话ID
-    std::vector<std::string> sessionIdList;
+    std::vector<std::shared_ptr<SessionInfo>> sessionList;
     for (const auto &it : sessionIds) {
-        sessionIdList.push_back(it.second->_sessionId);
+        sessionList.push_back(it.second);
     }
-    return sessionIdList;
+    return sessionList;
 }
 // 删除会话
 bool SessionManager::deleteSession(const std::string &sessionId) {
-    _mutex.lock();
-    // 检查会话是否存在
-    auto it = _sessions.find(sessionId);
-    if (it == _sessions.end()) {
-        _mutex.unlock();
-        WARN("session not found: {}", sessionId);
-        return false;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        // 检查会话是否存在
+        auto it = _sessions.find(sessionId);
+        if (it == _sessions.end()) {
+            WARN("session not found: {}", sessionId);
+            return false;
+        }
+        // 删除会话
+        _sessions.erase(it);
     }
-    // 删除会话
-    _sessions.erase(it);
-    _mutex.unlock();
     // 删除会话信息
     _dataManager.DeleteSession(sessionId);
     INFO("delete session: {}", sessionId);
@@ -211,10 +210,11 @@ bool SessionManager::deleteSession(const std::string &sessionId) {
 }
 // 清空所有会话
 bool SessionManager::clearSessions() {
-    _mutex.lock();
-    // 清空所有会话
-    _sessions.clear();
-    _mutex.unlock();
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        // 清空所有会话
+        _sessions.clear();
+    }
     // 清空所有会话信息
     _dataManager.DeleteAllSessions();
     INFO("clear all sessions");

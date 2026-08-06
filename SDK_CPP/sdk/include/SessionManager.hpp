@@ -20,7 +20,7 @@ class SessionManager {
     // 更新时间戳
     void updateTimestamp(const std::string &sessionId);
     // 获取会话列表
-    std::vector<std::string> getSessionIds();
+    std::vector<std::shared_ptr<SessionInfo>> getSessionList();
     // 删除会话
     bool deleteSession(const std::string &sessionId);
     // 清空所有会话

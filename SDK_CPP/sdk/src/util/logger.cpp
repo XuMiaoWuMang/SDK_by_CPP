@@ -30,7 +30,7 @@ void Logger::initLogger(const std::string &logFileName,
             // 设置日志等级
             _logger->set_level(level);
             // 设置日志格式
-            _logger->set_pattern("[%H:%M:%S.%e][%n][%l]%v");
+            _logger->set_pattern("[%H:%M:%S.%e][%n][%-5l]%v");
         }
     }
 }

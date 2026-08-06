@@ -87,7 +87,7 @@ DataManager::GetSession(const std::string &sessionId) {
     // 绑定参数
     sqlite3_bind_text(stmt, 1, sessionId.c_str(), -1, SQLITE_TRANSIENT);
     // 执行SQL语句
-    if (sqlite3_step(stmt) != SQLITE_ROW) {
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
         ERR("执行GetSession失败: {}", sqlite3_errmsg(_db));
         sqlite3_finalize(stmt);
         return nullptr;

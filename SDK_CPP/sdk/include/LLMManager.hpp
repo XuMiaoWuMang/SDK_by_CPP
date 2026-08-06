@@ -12,7 +12,7 @@ class LLMManager {
     bool initModel(const std::string &name,
                    const std::map<std::string, std::string> &modelParams);
     // 获取可用模型
-    std::vector<std::string> getAvailableModels() const;
+    std::vector<ModelInfo> getAvailableModels() const;
     // 检查模型是否可用
     bool isModelAvailable(const std::string &name) const;
     // 发送消息 - 全量

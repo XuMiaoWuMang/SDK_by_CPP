@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 聊天助手</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
+      </svg>
+      <span class="brand-name">AI 聊天助手</span>
+      <button id="btnNew" class="btn btn-primary btn-sm" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+        新建对话
+      </button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- 左侧：历史会话列表 -->
+    <aside class="sidebar">
+      <div id="sessionList" class="session-list"></div>
+    </aside>
+
+    <!-- 可拖拽分隔条 -->
+    <div id="sidebarResizer" class="resizer" title="拖拽调整宽度"></div>
+
+    <!-- 右侧：聊天主区域 -->
+    <main class="main">
+      <div class="chat-area">
+        <div id="welcome" class="welcome">
+          <div class="welcome-mark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12a8 8 0 0 1-8 8H4l2.5-3.5A8 8 0 1 1 21 12z"/>
+              <path d="M12 8.5v7M8.5 12h7"/>
+            </svg>
+          </div>
+          <p class="welcome-text">选择一个历史对话继续，或创建新的对话，开启您的AI之旅</p>
+          <button id="btnNew2" class="btn btn-primary" type="button">新建对话</button>
+        </div>
+
+        <div id="messageList" class="message-list hidden"></div>
+      </div>
+
+      <div id="inputArea" class="input-area hidden">
+        <div class="input-wrap">
+          <div class="input-box">
+            <textarea id="messageInput" maxlength="2000" placeholder="请输入您的消息...(Enter发送，Shift+Enter换行)"></textarea>
+          </div>
+          <div class="input-side">
+            <button id="btnSend" class="btn-send" type="button" title="发送" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 19V5M5 12l7-7 7 7"/>
+              </svg>
+            </button>
+            <span id="charCount" class="char-count">0/2000</span>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- 模型选择弹窗 -->
+  <div id="modelModal" class="modal-overlay hidden">
+    <div class="modal">
+      <h3 class="modal-title">选择本次对话的模型</h3>
+      <div id="modelGrid" class="model-grid"></div>
+      <div class="modal-actions">
+        <button id="btnModelCancel" class="btn btn-ghost" type="button">取消</button>
+        <button id="btnModelOk" class="btn btn-primary" type="button">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 删除会话确认弹窗 -->
+  <div id="confirmModal" class="modal-overlay hidden">
+    <div class="modal confirm-modal">
+      <div class="confirm-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 3 2.5 20h19L12 3z"/>
+          <path d="M12 10v4.2M12 17.2v.3"/>
+        </svg>
+      </div>
+      <h3 class="modal-title">删除这个对话？</h3>
+      <p class="confirm-desc">删除后不可恢复，服务器上的会话记录也会一并清除。</p>
+      <div class="modal-actions">
+        <button id="btnConfirmCancel" class="btn btn-ghost" type="button">取消</button>
+        <button id="btnConfirmOk" class="btn btn-danger" type="button">删除</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="js/chat.js"></script>
+</body>
+</html>

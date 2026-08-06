@@ -238,7 +238,7 @@ std::string OllamaLLMProvider::sendMessageStream(
             std::string line = replyContent.substr(0, pos);
             replyContent.erase(0, pos + 1);
             pos = 0;
-
+            INFO("OllamaLLMProvider sendMessageStream response line: {}", line);
             // 解析响应体
             Json::Value responseJson;
             Json::CharReaderBuilder builder;
@@ -270,7 +270,8 @@ std::string OllamaLLMProvider::sendMessageStream(
             // 提取message字段
             std::string message = responseJson["message"]["content"].asString();
             responseContent += message;
-            // callback(message, false);
+            // INFO("OllamaLLMProvider sendMessageStream response: {}", message);
+            callback(message, false);
         }
 
         return true;

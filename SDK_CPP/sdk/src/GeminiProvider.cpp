@@ -263,6 +263,7 @@ std::string GeminiProvider::sendMessageStream(
                 if (jsonStr == "[DONE]") {
                     INFO("GeminiProvider sendMessageStream stream finished");
                     streamFinished = true;
+                    callback("", true);
                     return true;
                 }
 

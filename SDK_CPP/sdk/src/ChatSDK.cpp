@@ -168,12 +168,12 @@ bool ChatSDK::deleteSession(const std::string &sessionId) {
     return result;
 }
 // 获取会话列表
-std::vector<std::string> ChatSDK::getSessionList() {
+std::vector<std::shared_ptr<SessionInfo>> ChatSDK::getSessionList() {
     if (!_isInit) {
         WARN("getSessionList error, isInit is false");
         return {};
     }
-    return _sessionManager.getSessionIds();
+    return _sessionManager.getSessionList();
 }
 // 获取指定会话
 std::shared_ptr<SessionInfo> ChatSDK::getSession(const std::string &sessionId) {
@@ -191,12 +191,12 @@ std::shared_ptr<SessionInfo> ChatSDK::getSession(const std::string &sessionId) {
     return result;
 }
 // 获取可用的模型列表
-std::vector<std::string> ChatSDK::getModelList() {
+std::vector<ModelInfo> ChatSDK::getModelList() {
     if (!_isInit) {
         WARN("getModelList error, isInit is false");
         return {};
     }
-    std::vector<std::string> modelList = _llmManager.getAvailableModels();
+    std::vector<ModelInfo> modelList = _llmManager.getAvailableModels();
     if (modelList.empty()) {
         ERR("getModelList error, no available models");
         return {};
@@ -238,6 +238,7 @@ std::string ChatSDK::sendMessage(const std::string &sessionId,
     Message assistantMessage("assistant", result);
     _sessionManager.addMessage(sessionId, assistantMessage); // 添加消息到会话
     INFO("sendMessage success, sessionId: {}", sessionId);
+    
     return result;
 }
 // 发送消息 - 流式返回
@@ -268,6 +269,9 @@ std::string ChatSDK::sendMessageStream(
 
     std::string result = _llmManager.sendMessageStream(
         sessionInfo->_modelName, sessionInfo->_messages, params, callback);
+
+    Message assistantMessage("assistant", result);
+    _sessionManager.addMessage(sessionId, assistantMessage); // 添加消息到会话
     if (result.empty()) {
         ERR("sendMessageStream error, sessionId is empty");
         return "";

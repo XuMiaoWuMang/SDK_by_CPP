@@ -8,8 +8,8 @@ namespace chat_sdk {
 class Message {
   public:
     Message(const std::string &role = "", const std::string &content = "")
-        : _messageId(std::to_string(std::time(nullptr))), _role(role),
-          _sendTimeTimestamp(std::time(nullptr)), _content(content) {}
+        : _role(role), _sendTimeTimestamp(std::time(nullptr)),
+          _content(content) {}
 
   public:
     std::string _messageId;         // 消息ID

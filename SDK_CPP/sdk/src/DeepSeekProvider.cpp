@@ -266,6 +266,7 @@ std::string DeepSeekProvider::sendMessageStream(
                 if (jsonStr == "[DONE]") {
                     INFO("DeepSeekProvider sendMessageStream stream finished");
                     streamFinished = true;
+                    callback("", true);
                     return true;
                 }
 
