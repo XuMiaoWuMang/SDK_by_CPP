@@ -6,6 +6,8 @@
 namespace chat_sdk {
 class ChatSDK {
   public:
+    // 构造: dbPath 指定数据库文件路径 (默认 chatDB.db, 可传完整路径)
+    explicit ChatSDK(const std::string &dbPath = "chatDB.db");
     // 初始化模型管理器
     bool initLLMManager(const std::vector<std::shared_ptr<Config>> &configMap);
     // 创建会话

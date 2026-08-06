@@ -156,6 +156,17 @@ void SessionManager::updateTimestamp(const std::string &sessionId) {
 // 获取会话列表
 std::vector<std::shared_ptr<SessionInfo>> SessionManager::getSessionList() {
     auto sessions = _dataManager.GetAllSessions();
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        // 内存中的会话若未加载消息(如刚启动时), 从数据库补齐,
+        // 供会话列表展示最后一条用户消息
+        for (const auto &it : _sessions) {
+            if (it.second->_messages.empty()) {
+                it.second->_messages =
+                    _dataManager.GetAllMessages(it.second->_sessionId);
+            }
+        }
+    }
     for (auto &it : sessions) {
         it->_messages = _dataManager.GetAllMessages(it->_sessionId);
     }

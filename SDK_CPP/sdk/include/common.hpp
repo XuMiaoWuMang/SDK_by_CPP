@@ -29,7 +29,8 @@ struct Config {
 
 // 远端模型需要api key
 struct RemoteConfig : Config {
-    std::string _apiKey; // API key
+    std::string _apiKey;    // API key
+    std::string _provider;  // 模型提供方: deepseek / gemini / chatgpt
     RemoteConfig() = default;
 };
 

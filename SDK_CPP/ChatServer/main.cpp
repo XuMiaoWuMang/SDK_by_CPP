@@ -2,6 +2,9 @@
 
 #include <ai_cpp_sdk/util/logger.hpp>
 #include <gflags/gflags.h>
+#include <jsoncpp/json/reader.h>
+#include <jsoncpp/json/value.h>
+#include <jsoncpp/json/writer.h>
 #include <spdlog/spdlog.h>
 
 #include <atomic>
@@ -9,44 +12,31 @@
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits.h>
 #include <string>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 // ===================== 版本号 =====================
 static const char *kVersion = "1.0.0";
 
-// ===================== 命令行参数定义 (gflags) =====================
-// 服务器参数
-DEFINE_string(server_ip, "0.0.0.0", "服务器绑定的IP地址");
-DEFINE_int32(server_port, 8080, "服务器监听的端口号");
-DEFINE_string(log_level, "INFO",
+// ===================== 命令行标量参数 (gflags) =====================
+// 参数优先级: 命令行(显式设置) > JSON 配置文件 > 内置默认值
+// 哨兵默认值(-1/空串)用于区分"命令行是否显式设置", 未设置时以配置文件/默认值为准
+DEFINE_string(server_ip, "", "服务器绑定的IP地址");
+DEFINE_int32(server_port, -1, "服务器监听的端口号");
+DEFINE_string(log_level, "",
               "日志级别: TRACE / DEBUG / INFO / WARN / ERROR / FATAL");
-
-// 模型通用参数
-DEFINE_double(temperature, 0.7, "模型温度参数, 取值范围 [0, 2]");
-DEFINE_int64(max_tokens, 2048, "模型生成的最大token数, 不能为负数");
-
-// 云端模型参数 (API Key 不通过命令行提供, 直接从环境变量获取)
-DEFINE_string(deepseek_model_name, "deepseek-v4-flash",
-              "DeepSeek 云端模型名称");
-DEFINE_string(gemini_model_name, "gemini-3.5-flash", "Gemini 云端模型名称");
-DEFINE_string(openai_model_name, "gpt-3.5-turbo", "ChatGPT 云端模型名称");
-
-// 本地 Ollama 模型参数
-DEFINE_string(ollama_model_name, "deepseek-r1:1.5b", "本地 Ollama 模型名称");
-DEFINE_string(ollama_endpoint, "http://127.0.0.1:11434",
-              "本地 Ollama 服务端点地址");
-DEFINE_string(ollama_model_desc,
-              "本地部署 deepseek-r1:1.5b 模型, 采用专家混合架构, "
-              "专注于深度理解与推理",
-              "本地 Ollama 模型描述");
-
-// 配置文件
-DEFINE_string(config_file, "ChatServer.conf",
-              "配置文件路径, 若不存在则自动生成默认配置文件");
+DEFINE_double(temperature, -1.0, "模型温度参数, 取值范围 [0, 2]");
+DEFINE_int64(max_tokens, -1, "模型生成的最大token数, 不能为负数");
+DEFINE_string(log_file, "",
+              "日志输出: stdout(控制台) 或日志目录/文件路径");
+DEFINE_string(config_file, "",
+              "配置文件路径 (默认: 可执行文件上一级目录下的 env.conf)");
 
 // ===================== 全局状态 =====================
 static std::atomic<bool> g_stopFlag{false};
@@ -65,36 +55,6 @@ static std::string ToUpper(std::string str) {
     std::transform(str.begin(), str.end(), str.begin(),
                    [](unsigned char c) { return std::toupper(c); });
     return str;
-}
-
-// 去除字符串首尾空白字符
-static std::string Trim(const std::string &s) {
-    const size_t b = s.find_first_not_of(" \t\r\n");
-    if (b == std::string::npos) {
-        return "";
-    }
-    const size_t e = s.find_last_not_of(" \t\r\n");
-    return s.substr(b, e - b + 1);
-}
-
-// 按分隔符拆分字符串, 自动忽略空项, 返回各段首尾去空白后的结果
-static std::vector<std::string> Split(const std::string &src, char delim) {
-    std::vector<std::string> parts;
-    std::string cur;
-    for (const char c : src) {
-        if (c == delim) {
-            if (!cur.empty()) {
-                parts.push_back(Trim(cur));
-                cur.clear();
-            }
-        } else {
-            cur += c;
-        }
-    }
-    if (!cur.empty()) {
-        parts.push_back(Trim(cur));
-    }
-    return parts;
 }
 
 // 解析日志级别, 非法值回退到 INFO
@@ -124,63 +84,173 @@ static bool FileExists(const std::string &path) {
     return file.good();
 }
 
-// 检查命令行中是否设置了某个 flag (支持 --name 与 --name=value 两种形式)
-static bool HasCmdLineFlag(int argc, char **argv, const std::string &name) {
-    const std::string exact = "--" + name;
-    const std::string prefix = exact + "=";
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i];
-        if (arg == exact || arg.rfind(prefix, 0) == 0) {
-            return true;
-        }
+// 获取可执行文件所在目录的上一级目录 (通过 /proc/self/exe 解析真实路径,
+// 与启动时的工作目录无关, 保证从任意目录启动都能定位到 ChatServer 目录)
+static std::string GetExecutableParentDir() {
+    char buf[PATH_MAX];
+    const ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n <= 0) {
+        return ".";
     }
-    return false;
+    buf[n] = '\0';
+    const std::string exe(buf);
+    const size_t pos = exe.find_last_of('/');
+    const std::string dir =
+        (pos == std::string::npos) ? "." : exe.substr(0, pos);
+    const size_t parent = dir.find_last_of('/');
+    return (parent == std::string::npos) ? "." : dir.substr(0, parent);
 }
 
-// 获取命令行中 --name=value 形式 flag 的值, 未设置时返回空串
-static std::string GetCmdLineFlagValue(int argc, char **argv,
-                                       const std::string &name) {
-    const std::string prefix = "--" + name + "=";
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i];
-        if (arg.rfind(prefix, 0) == 0) {
-            return arg.substr(prefix.size());
-        }
-    }
-    return "";
+// 默认配置文件路径: <可执行文件上一级目录>/env.conf
+static std::string GetDefaultConfigPath() {
+    return GetExecutableParentDir() + "/env.conf";
 }
 
-// 若配置文件不存在, 则生成一份默认配置文件
-static void EnsureConfigFile(const std::string &path) {
-    if (FileExists(path)) {
-        return;
+// 判断命令行是否显式设置了某 flag (排除 gflags 内置默认值)
+static bool FlagWasSet(const std::string &name) {
+    gflags::CommandLineFlagInfo info;
+    return gflags::GetCommandLineFlagInfo(name.c_str(), &info) &&
+           !info.is_default;
+}
+
+// 解析日志输出路径 (锚定可执行文件上一级目录):
+//   "stdout" 或空 -> 控制台; 以 ".log" 结尾 -> 视为完整文件路径;
+//   其余 -> 视为目录, 自动拼接默认日志文件名 AIChatServer.log;
+//   相对路径均基于 baseDir (exe 上一级), 绝对路径直接使用
+static std::string ResolveLogPath(const std::string &logFile,
+                                  const std::string &baseDir) {
+    if (logFile.empty() || logFile == "stdout") {
+        return "stdout";
     }
-    std::ofstream file(path);
+    std::string path = logFile;
+    if (path[0] != '/') {
+        path = baseDir + "/" + path;
+    }
+    if (path.size() >= 4 &&
+        path.compare(path.size() - 4, 4, ".log") == 0) {
+        return path;
+    }
+    return path + "/AIChatServer.log";
+}
+
+// 解析数据目录: 相对路径锚定可执行文件上一级, 绝对路径直接使用
+static std::string ResolveDataDir(const std::string &dataDir,
+                                  const std::string &baseDir) {
+    if (dataDir.empty() || dataDir[0] == '/') {
+        return dataDir.empty() ? baseDir : dataDir;
+    }
+    return baseDir + "/" + dataDir;
+}
+
+// 加载 JSON 配置文件
+static bool LoadJsonConfig(const std::string &path, Json::Value &root,
+                           std::string &errMsg) {
+    std::ifstream file(path);
     if (!file.is_open()) {
-        std::cerr << "警告: 无法生成配置文件 " << path << std::endl;
-        return;
+        errMsg = "无法打开配置文件: " + path;
+        return false;
     }
-    file << "# AIChatServer 默认配置文件 (gflags flagfile 格式)" << std::endl;
-    file << "# 参数可通过命令行或本配置文件提供, 命令行参数优先级更高"
-         << std::endl;
-    file << "# 云端模型 API Key 不在此配置, 请通过环境变量提供:" << std::endl;
-    file << "#   DEEPSEEK_API_KEY  (DeepSeek)" << std::endl;
-    file << "#   CHATGPT_API_KEY   (ChatGPT, 兼容 OPENAI_API_KEY)" << std::endl;
-    file << "#   GEMINI_API_KEY    (Gemini)" << std::endl;
-    file << std::endl;
-    file << "--server_ip=" << FLAGS_server_ip << std::endl;
-    file << "--server_port=" << FLAGS_server_port << std::endl;
-    file << "--log_level=" << FLAGS_log_level << std::endl;
-    file << "--temperature=" << FLAGS_temperature << std::endl;
-    file << "--max_tokens=" << FLAGS_max_tokens << std::endl;
-    file << "--deepseek_model_name=" << FLAGS_deepseek_model_name << std::endl;
-    file << "--gemini_model_name=" << FLAGS_gemini_model_name << std::endl;
-    file << "--openai_model_name=" << FLAGS_openai_model_name << std::endl;
-    file << "--ollama_model_name=" << FLAGS_ollama_model_name << std::endl;
-    file << "--ollama_endpoint=" << FLAGS_ollama_endpoint << std::endl;
-    file << "--ollama_model_desc=" << FLAGS_ollama_model_desc << std::endl;
-    file.close();
-    std::cout << "已生成默认配置文件: " << path << std::endl;
+    Json::CharReaderBuilder builder;
+    std::string errs;
+    if (!Json::parseFromStream(builder, file, &root, &errs)) {
+        errMsg = "配置文件不是合法的 JSON (第 " + std::to_string(1) +
+                 " 处错误): " + errs;
+        return false;
+    }
+    return true;
+}
+
+// 从 JSON 配置文件填充 ServerConfig (不含命令行覆盖)
+static bool ParseJsonConfig(const Json::Value &root,
+                            chat_server::ServerConfig &config,
+                            std::string &logLevel, std::string &logFile,
+                            std::string &errMsg) {
+    // server 节: ip / port / log_level / log_file
+    const Json::Value &serverObj =
+        root.get("server", Json::Value(Json::objectValue));
+    if (!serverObj.isObject()) {
+        errMsg = "配置项 \"server\" 必须是对象";
+        return false;
+    }
+    config.server_ip = serverObj.get("ip", "0.0.0.0").asString();
+    config.server_port = serverObj.get("port", 8080).asInt();
+    logLevel = serverObj.get("log_level", "INFO").asString();
+    logFile = serverObj.get("log_file", "stdout").asString();
+    config.data_dir = serverObj.get("data_dir", "data").asString();
+
+    // 全局默认模型参数
+    const double globalTemp = root.get("temperature", 0.7).asDouble();
+    const int64_t globalMax = root.get("max_tokens", 2048).asInt64();
+    if (globalMax < 0) {
+        errMsg = "全局 max_tokens 不能为负数, 当前值: " +
+                 std::to_string(globalMax);
+        return false;
+    }
+    config.temperature = globalTemp;
+    config.max_tokens = static_cast<size_t>(globalMax);
+
+    // 模型列表
+    const Json::Value &models =
+        root.get("models", Json::Value(Json::arrayValue));
+    if (!models.isArray()) {
+        errMsg = "配置项 \"models\" 必须是数组";
+        return false;
+    }
+    for (const auto &m : models) {
+        if (!m.isObject()) {
+            continue;
+        }
+        const std::string provider = m.get("provider", "").asString();
+        const std::string name = m.get("name", "").asString();
+        if (name.empty()) {
+            errMsg = "模型条目的 \"name\" 不能为空";
+            return false;
+        }
+        // 每模型可覆盖全局温度与 max_tokens
+        double temp = m.isMember("temperature")
+                          ? m["temperature"].asDouble()
+                          : config.temperature;
+        int64_t maxTok = m.isMember("max_tokens")
+                             ? m["max_tokens"].asInt64()
+                             : static_cast<int64_t>(config.max_tokens);
+        if (maxTok < 0) {
+            errMsg = "模型 " + name + " 的 max_tokens 不能为负数";
+            return false;
+        }
+
+        if (provider == "ollama") {
+            // 本地模型: 必须提供 endpoint
+            chat_sdk::OllamaConfig ollamaConfig;
+            ollamaConfig._modelName = name;
+            ollamaConfig._endpoint = m.get("endpoint", "").asString();
+            ollamaConfig._modelDesc = m.get("desc", "").asString();
+            ollamaConfig._temperature = temp;
+            ollamaConfig._maxTokens = static_cast<int>(maxTok);
+            config.ollama_configs.push_back(ollamaConfig);
+        } else if (provider == "deepseek" || provider == "gemini" ||
+                   provider == "chatgpt" || provider == "openai") {
+            // 云端模型: API Key 规则为条目 api_key 优先, 为空回退环境变量 (SDK 处理)
+            chat_sdk::RemoteConfig remoteConfig;
+            remoteConfig._provider =
+                (provider == "openai") ? "chatgpt" : provider;
+            remoteConfig._modelName = name;
+            remoteConfig._temperature = temp;
+            remoteConfig._maxTokens = static_cast<int>(maxTok);
+            remoteConfig._modelDesc = m.get("desc", "").asString();
+            remoteConfig._apiKey = m.get("api_key", "").asString();
+            if (remoteConfig._apiKey.empty()) {
+                std::cerr << "[WARN] 云端模型 " << name
+                          << " 未配置 api_key, 将回退环境变量 (若未设置则不可用)"
+                          << std::endl;
+            }
+            config.remote_configs.push_back(remoteConfig);
+        } else {
+            errMsg = "未知的模型 provider: \"" + provider +
+                     "\", 可选: ollama / deepseek / gemini / chatgpt";
+            return false;
+        }
+    }
+    return true;
 }
 
 // 对配置参数进行安全检查
@@ -192,34 +262,45 @@ static bool ValidateConfig(const chat_server::ServerConfig &config,
                  std::to_string(config.temperature);
         return false;
     }
-    // 2. 最大token数不能为负数 (ServerConfig 中为 size_t, 需在转换前校验)
-    if (FLAGS_max_tokens < 0) {
-        errMsg = "最大token数 max_tokens 不能为负数, 当前值: " +
-                 std::to_string(FLAGS_max_tokens);
-        return false;
-    }
-    // 3. 云端模型 API Key 至少有一个不为空
-    if (config.deepseek_api_key.empty() && config.gemini_api_key.empty() &&
-        config.openai_api_key.empty()) {
-        errMsg = "至少需要配置一个云端模型的 API Key, 请设置环境变量 "
-                 "DEEPSEEK_API_KEY / CHATGPT_API_KEY / GEMINI_API_KEY";
-        return false;
-    }
-    // 4. 服务器端口号必须在合法范围内
+    // 2. 服务器端口号必须在合法范围内
     if (config.server_port <= 0 || config.server_port > 65535) {
         errMsg = "服务器端口号 server_port 必须在 [1, 65535] 范围内, 当前值: " +
                  std::to_string(config.server_port);
         return false;
     }
+    // 3. 至少注册了一个模型 (本地或云端)
+    if (config.ollama_configs.empty() && config.remote_configs.empty()) {
+        errMsg = "未配置任何模型: 请在配置文件的 models 中添加模型";
+        return false;
+    }
+    // 4. 云端模型必须有 API Key (配置条目 api_key 或对应环境变量)
+    for (const auto &remote : config.remote_configs) {
+        bool hasKey = !remote._apiKey.empty();
+        if (!hasKey) {
+            if (remote._provider == "gemini") {
+                hasKey = !GetEnv("GEMINI_API_KEY").empty();
+            } else if (remote._provider == "chatgpt") {
+                hasKey = !GetEnv("CHATGPT_API_KEY").empty() ||
+                         !GetEnv("OPENAI_API_KEY").empty();
+            } else {
+                hasKey = !GetEnv("DEEPSEEK_API_KEY").empty();
+            }
+        }
+        if (!hasKey) {
+            errMsg = "云端模型 " + remote._modelName +
+                     " 未配置 API Key, 请设置 api_key 或对应环境变量";
+            return false;
+        }
+    }
     // 5. Ollama 配置参数不能为空
     for (const auto &ollama : config.ollama_configs) {
         if (ollama._modelName.empty()) {
-            errMsg = "Ollama 模型名称不能为空, 请检查 --ollama_model_name 参数";
+            errMsg = "Ollama 模型名称不能为空";
             return false;
         }
         if (ollama._endpoint.empty()) {
-            errMsg =
-                "Ollama 服务端点地址不能为空, 请检查 --ollama_endpoint 参数";
+            errMsg = "Ollama 服务端点不能为空, 请检查模型 " +
+                     ollama._modelName + " 的 endpoint 配置";
             return false;
         }
     }
@@ -240,60 +321,52 @@ static void PrintHelp(const char *program) {
         << "\n"
         << "用法: " << program << " [选项]\n"
         << "\n"
-        << "参数选项说明:\n"
-        << "  --server_ip=<ip>            服务器绑定的IP地址 (默认: 0.0.0.0)\n"
-        << "  --server_port=<port>        服务器监听的端口号 (默认: 8080)\n"
-        << "  --log_level=<level>         日志级别 (默认: INFO)\n"
-        << "                              可选: TRACE / DEBUG / INFO / WARN / "
-           "ERROR / FATAL\n"
-        << "  --temperature=<value>       模型温度参数, 取值范围 [0, 2] (默认: "
-           "0.7)\n"
-        << "  --max_tokens=<value>        模型生成的最大token数, 不能为负数 "
-           "(默认: 2048)\n"
-        << "  --deepseek_model_name=<n>   DeepSeek 云端模型名称 (默认: "
-           "deepseek-v4-flash)\n"
-        << "  --gemini_model_name=<n>     Gemini 云端模型名称 (默认: "
-           "gemini-3.5-flash)\n"
-        << "  --openai_model_name=<n>     ChatGPT 云端模型名称 (默认: "
-           "gpt-3.5-turbo)\n"
-        << "  --ollama_model_name=<n>     本地 Ollama 模型名称, 多个以逗号分隔 "
-           "(默认: deepseek-r1:1.5b)\n"
-        << "  --ollama_endpoint=<url>     本地 Ollama 服务端点, 多个以逗号分隔 "
-           "(默认: http://127.0.0.1:11434)\n"
-        << "                              数量不足时自动使用默认端点\n"
-        << "  --ollama_model_desc=<desc>  本地 Ollama 模型描述, 多个以分号分隔\n"
-        << "                              数量不足时描述留空\n"
-        << "  --config_file=<path>        配置文件路径 (默认: "
-           "ChatServer.conf)\n"
-        << "                              若不存在会自动生成默认配置文件\n"
+        << "参数选项说明 (优先级: 命令行 > 配置文件 > 默认值):\n"
+        << "  --server_ip=<ip>            服务器绑定的IP地址\n"
+        << "  --server_port=<port>        服务器监听的端口号\n"
+        << "  --log_level=<level>         日志级别: TRACE / DEBUG / INFO / "
+           "WARN / ERROR / FATAL\n"
+        << "  --temperature=<value>       全局模型温度, 取值范围 [0, 2]\n"
+        << "  --max_tokens=<value>        全局最大token数, 不能为负数\n"
+        << "  --log_file=<path>           日志输出: stdout(控制台) / 日志目录 "
+           "/ 文件路径\n"
+        << "  --config_file=<path>        配置文件路径\n"
+        << "                              默认: 可执行文件上一级目录下的 "
+           "env.conf\n"
         << "  -h, --help                  显示本帮助信息\n"
         << "  -v, --version               显示版本号\n"
         << "\n"
-        << "环境变量:\n"
-        << "  云端模型 API Key 通过环境变量提供, 不通过命令行参数:\n"
+        << "配置文件 (env.conf, JSON 格式):\n"
+        << "  服务器参数: server.ip / server.port / server.log_level /\n"
+        << "              server.log_file (stdout 或日志目录/文件路径) /\n"
+        << "              server.data_dir (数据目录, 默认 data)\n"
+        << "  日志与数据目录: 相对路径锚定可执行文件上一级, 绝对路径直接用\n"
+        << "  字段级配置编写说明: 见同目录《配置说明.md》\n"
+        << "  全局默认模型参数: temperature / max_tokens (模型条目可覆盖)\n"
+        << "  模型列表: models 数组, 每条目字段:\n"
+        << "    provider   模型提供方: ollama(本地) / deepseek / gemini / "
+           "chatgpt\n"
+        << "    name       模型名称\n"
+        << "    endpoint   仅 ollama 需要, 本地服务端点\n"
+        << "    api_key    可选, 云端模型 API Key, 覆盖同名环境变量\n"
+        << "    desc       可选, 模型描述\n"
+        << "    temperature / max_tokens  可选, 覆盖全局值\n"
+        << "  未找到配置文件时使用内置默认值启动; 配置模板请参考 "
+           "env.conf.example\n"
+        << "\n"
+        << "环境变量 (云端模型 API Key, 配置文件 api_key 可覆盖):\n"
         << "    DEEPSEEK_API_KEY    DeepSeek 模型 API Key\n"
         << "    CHATGPT_API_KEY     ChatGPT 模型 API Key (兼容 "
            "OPENAI_API_KEY)\n"
         << "    GEMINI_API_KEY      Gemini 模型 API Key\n"
         << "\n"
         << "使用示例:\n"
+        << "  " << program << "                                    # 使用配置文件启动\n"
+        << "  " << program << " --server_port=9090                 # 命令行覆盖端口\n"
         << "  " << program
-        << "                                    # 使用默认配置启动\n"
-        << "  " << program << " --server_ip=0.0.0.0 --server_port=8080\n"
-        << "  " << program << " --temperature=0.8 --max_tokens=4096\n"
-        << "  " << program
-        << " --ollama_model_name=qwen2.5:7b "
-           "--ollama_endpoint=http://127.0.0.1:11434\n"
-        << "  " << program
-        << " --ollama_model_name=deepseek-r1:1.5b,qwen2.5:7b "
-           "--ollama_endpoint=http://127.0.0.1:11434\n"
-        << "                               # 配置多个本地模型\n"
-        << "  " << program
-        << " --config_file=ChatServer.conf       # 从配置文件加载参数\n"
-        << "  " << program
-        << " -h / --help                         # 显示帮助\n"
-        << "  " << program
-        << " -v / --version                      # 显示版本号\n"
+        << " --config_file=/path/to/env.conf  # 指定配置文件\n"
+        << "  " << program << " -h / --help                         # 显示帮助\n"
+        << "  " << program << " -v / --version                      # 显示版本号\n"
         << "\n"
         << "HTTP 接口说明 (默认地址 http://<server_ip>:<server_port>):\n"
         << "  POST   /api/session                      创建会话, body: "
@@ -311,10 +384,6 @@ static void PrintHelp(const char *program) {
            "data(业务数据)\n"
         << "流式接口 /api/message/async 返回格式: data: <增量内容>\\n\\n, "
            "结束标志: data: [DONE]\\n\\n\n"
-        << "\n"
-        << "说明: Gemini / ChatGPT 等云端模型的 endpoint 使用 SDK "
-           "内置默认端点, "
-           "如需自定义请扩展 AI_SDK_CPP\n"
         << "\n"
         << "版本: " << kVersion << std::endl;
 }
@@ -334,82 +403,94 @@ int main(int argc, char **argv) {
         }
     }
 
-    // 2. 确定配置文件路径并加载 (命令行参数优先级高于配置文件)
-    //    若命令行未显式指定 --flagfile, 则将 --flagfile 插入 argv 最前面,
-    //    使 gflags 先加载配置文件, 再被命令行参数覆盖
-    std::string configFile = FLAGS_config_file;
-    const std::string cmdConfigFile =
-        GetCmdLineFlagValue(argc, argv, "config_file");
-    if (!cmdConfigFile.empty()) {
-        configFile = cmdConfigFile;
-    }
-    std::vector<std::string> argList;
-    std::vector<char *> argvPtrs;
-    if (!HasCmdLineFlag(argc, argv, "flagfile")) {
-        // 配置文件不存在则自动生成默认配置
-        EnsureConfigFile(configFile);
-        if (FileExists(configFile)) {
-            argList.push_back(argv[0]);
-            argList.push_back("--flagfile=" + configFile);
-            for (int i = 1; i < argc; ++i) {
-                argList.push_back(argv[i]);
-            }
-            argvPtrs.reserve(argList.size() + 1);
-            for (auto &arg : argList) {
-                argvPtrs.push_back(arg.data());
-            }
-            argvPtrs.push_back(nullptr);
-            argc = static_cast<int>(argList.size());
-            argv = argvPtrs.data();
-        }
-    }
-
-    // 3. 解析命令行参数 (参数可能来自命令行, 也可能来自配置文件)
+    // 2. 解析命令行标量参数
     gflags::SetUsageMessage("AIChatServer - 基于 AI_SDK_CPP 的智能聊天服务器, "
                             "使用 --help 查看详细帮助");
     gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-    // 4. 构建服务器配置
+    // 3. 定位配置文件: 命令行 --config_file 优先, 否则默认在可执行文件
+    //    上一级目录下
+    const std::string configPath =
+        FlagWasSet("config_file") ? FLAGS_config_file : GetDefaultConfigPath();
+
+    // 4. 构建服务器配置: 内置默认值 -> JSON 配置文件 -> 命令行覆盖
     chat_server::ServerConfig config;
-    config.server_ip = FLAGS_server_ip;
-    config.server_port = FLAGS_server_port;
-    config.temperature = FLAGS_temperature;
-    config.max_tokens = static_cast<size_t>(FLAGS_max_tokens);
+    std::string logLevel;
+    std::string logFile = "stdout";
+    bool configLoaded = false;
+    if (FileExists(configPath)) {
+        Json::Value root;
+        std::string errMsg;
+        if (!LoadJsonConfig(configPath, root, errMsg)) {
+            std::cerr << "[FATAL] " << errMsg << std::endl;
+            std::cerr << "[FATAL] 请参考配置模板: " << configPath << ".example"
+                      << std::endl;
+            return 1;
+        }
+        if (!ParseJsonConfig(root, config, logLevel, logFile, errMsg)) {
+            std::cerr << "[FATAL] " << errMsg << std::endl;
+            std::cerr << "[FATAL] 请参考配置模板: " << configPath << ".example"
+                      << std::endl;
+            return 1;
+        }
+        configLoaded = true;
+    } else {
+        // 配置文件不存在: 使用内置默认值启动
+        config.server_ip = "0.0.0.0";
+        config.server_port = 8080;
+        config.temperature = 0.7;
+        config.max_tokens = 2048;
+        logLevel = "INFO";
 
-    // 云端模型 (API Key 从环境变量获取)
-    config.deepseek_model_name = FLAGS_deepseek_model_name;
-    config.deepseek_api_key = GetEnv("DEEPSEEK_API_KEY");
-    config.gemini_model_name = FLAGS_gemini_model_name;
-    config.gemini_api_key = GetEnv("GEMINI_API_KEY");
-    config.openai_model_name = FLAGS_openai_model_name;
-    config.openai_api_key = GetEnv("CHATGPT_API_KEY");
-    if (config.openai_api_key.empty()) {
-        config.openai_api_key = GetEnv("OPENAI_API_KEY");
-    }
+        // 默认注册: 云端 deepseek-v4-flash + 本地 ollama deepseek-r1:1.5b
+        chat_sdk::RemoteConfig deepseekConfig;
+        deepseekConfig._provider = "deepseek";
+        deepseekConfig._modelName = "deepseek-v4-flash";
+        deepseekConfig._temperature = config.temperature;
+        deepseekConfig._maxTokens = static_cast<int>(config.max_tokens);
+        config.remote_configs.push_back(deepseekConfig);
 
-    // 本地 Ollama 模型 (支持配置多个, 默认: deepseek-r1:1.5b)
-    //   模型名称与端点以逗号分隔, 描述以分号分隔(描述中可能包含逗号)
-    //   例: --ollama_model_name=a,b --ollama_endpoint=http://x,http://y
-    //       --ollama_model_desc=描述A;描述B
-    //   endpoint/描述可少于模型数量, 缺失项使用默认值
-    const std::vector<std::string> ollamaNames = Split(FLAGS_ollama_model_name, ',');
-    const std::vector<std::string> ollamaEndpoints = Split(FLAGS_ollama_endpoint, ',');
-    const std::vector<std::string> ollamaDescs = Split(FLAGS_ollama_model_desc, ';');
-    for (size_t i = 0; i < ollamaNames.size(); ++i) {
         chat_sdk::OllamaConfig ollamaConfig;
-        ollamaConfig._modelName = ollamaNames[i];
-        ollamaConfig._endpoint =
-            (i < ollamaEndpoints.size() && !ollamaEndpoints[i].empty())
-                ? ollamaEndpoints[i]
-                : "http://127.0.0.1:11434";
+        ollamaConfig._modelName = "deepseek-r1:1.5b";
+        ollamaConfig._endpoint = "http://127.0.0.1:11434";
         ollamaConfig._modelDesc =
-            (i < ollamaDescs.size()) ? ollamaDescs[i] : "";
-        ollamaConfig._temperature = FLAGS_temperature;
-        ollamaConfig._maxTokens = static_cast<int>(FLAGS_max_tokens);
+            "本地部署 deepseek-r1:1.5b 模型, 专注于深度理解与推理";
+        ollamaConfig._temperature = config.temperature;
+        ollamaConfig._maxTokens = static_cast<int>(config.max_tokens);
         config.ollama_configs.push_back(ollamaConfig);
+
+        std::cerr << "[WARN] 未找到配置文件 " << configPath
+                  << ", 已使用内置默认配置启动" << std::endl;
+        std::cerr << "[WARN] 配置模板请参考: " << configPath << ".example"
+                  << std::endl;
     }
 
-    // 5. 配置参数安全检查
+    // 5. 命令行显式设置的参数覆盖配置文件
+    if (FlagWasSet("server_ip")) {
+        config.server_ip = FLAGS_server_ip;
+    }
+    if (FlagWasSet("server_port")) {
+        config.server_port = FLAGS_server_port;
+    }
+    if (FlagWasSet("log_level")) {
+        logLevel = FLAGS_log_level;
+    }
+    if (FlagWasSet("temperature")) {
+        config.temperature = FLAGS_temperature;
+    }
+    if (FlagWasSet("max_tokens")) {
+        if (FLAGS_max_tokens < 0) {
+            std::cerr << "[FATAL] max_tokens 不能为负数, 当前值: "
+                      << FLAGS_max_tokens << std::endl;
+            return 1;
+        }
+        config.max_tokens = static_cast<size_t>(FLAGS_max_tokens);
+    }
+    if (FlagWasSet("log_file")) {
+        logFile = FLAGS_log_file;
+    }
+
+    // 6. 配置参数安全检查
     std::string errMsg;
     if (!ValidateConfig(config, errMsg)) {
         std::cerr << "[FATAL] 配置参数检查失败: " << errMsg << std::endl;
@@ -418,19 +499,56 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // 6. 初始化日志
-    sdk_logger::Logger::initLogger("AIChatServer", "stdout",
-                                   ParseLogLevel(FLAGS_log_level));
+    // 7. 初始化日志与数据目录: 相对路径锚定可执行文件上一级
+    const std::string baseDir = GetExecutableParentDir();
+    const std::string logPath = ResolveLogPath(logFile, baseDir);
+    if (logPath != "stdout") {
+        const std::filesystem::path parent =
+            std::filesystem::path(logPath).parent_path();
+        if (!parent.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(parent, ec);
+            if (ec) {
+                std::cerr << "[WARN] 创建日志目录失败: " << ec.message()
+                          << std::endl;
+            }
+        }
+    }
+    sdk_logger::Logger::initLogger("AIChatServer", logPath,
+                                   ParseLogLevel(logLevel));
 
-    // 7. 启动服务器
+    // 数据目录: 确保存在, 并拼出数据库完整路径
+    const std::string dataDir = ResolveDataDir(config.data_dir, baseDir);
+    if (!dataDir.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(dataDir, ec);
+        if (ec) {
+            std::cerr << "[WARN] 创建数据目录失败: " << ec.message()
+                      << std::endl;
+        }
+    }
+    config.db_path = dataDir + "/chatDB.db";
+
+    // 8. 启动服务器
     INFO("AIChatServer 启动中, 版本: {}, 监听地址: {}:{}, 日志级别: {}",
-         kVersion, config.server_ip, config.server_port, FLAGS_log_level);
-    INFO("默认云端模型: {}, 默认本地模型: {} ({})", config.deepseek_model_name,
-         FLAGS_ollama_model_name, FLAGS_ollama_endpoint);
+         kVersion, config.server_ip, config.server_port, logLevel);
+    INFO("配置文件: {}, 已加载: {}", configPath, configLoaded);
+    INFO("日志输出: {}", logPath);
+    INFO("数据目录: {}, 数据库: {}", dataDir, config.db_path);
+    INFO("云端模型数量: {}", config.remote_configs.size());
+    for (const auto &remote : config.remote_configs) {
+        INFO("  云端模型: {} (provider={}, key={})", remote._modelName,
+             remote._provider,
+             remote._apiKey.empty() ? "回退环境变量" : "配置提供");
+    }
+    INFO("本地模型数量: {}", config.ollama_configs.size());
+    for (const auto &ollama : config.ollama_configs) {
+        INFO("  本地模型: {} @ {}", ollama._modelName, ollama._endpoint);
+    }
     chat_server::ChatServer server(config);
     server.start();
 
-    // 8. 注册信号处理, 阻塞等待退出信号
+    // 9. 注册信号处理, 阻塞等待退出信号
     std::signal(SIGINT, SignalHandler);
     std::signal(SIGTERM, SignalHandler);
     while (!g_stopFlag.load()) {

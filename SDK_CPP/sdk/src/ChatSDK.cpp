@@ -1,11 +1,16 @@
 #include "../include/ChatSDK.hpp"
+#include "../include/ChatGPTProvider.hpp"
 #include "../include/DeepSeekProvider.hpp"
+#include "../include/GeminiProvider.hpp"
 #include "../include/OllamaLLMProvider.hpp"
 #include "../include/util/logger.hpp"
+#include <cstdlib>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
 namespace chat_sdk {
+// 构造函数: 指定数据库文件路径
+ChatSDK::ChatSDK(const std::string &dbPath) : _sessionManager(dbPath) {}
 // 初始化模型管理器
 bool ChatSDK::initLLMManager(
     const std::vector<std::shared_ptr<Config>> &configMap) {
@@ -15,49 +20,49 @@ bool ChatSDK::initLLMManager(
     _isInit = true;
     return true;
 }
-// 注册模型列表
+// 注册模型列表: 模型全部来自配置, 云端模型按 _provider 实例化对应 Provider,
+// 本地模型使用 OllamaLLMProvider (LLMManager 以模型名为 key, 支持同 provider 多模型)
 bool ChatSDK::registerModelList(
     const std::vector<std::shared_ptr<Config>> &configMap) {
-    // 若未注册deepseek-v4-flash，则注册
-    if (!_llmManager.isModelAvailable("deepseek-v4-flash")) {
-        auto provider = std::make_unique<DeepSeekProvider>();
+    std::unordered_set<std::string> registeredModels;
+    for (auto &config : configMap) {
+        if (config == nullptr) {
+            continue;
+        }
+        if (registeredModels.find(config->_modelName) !=
+            registeredModels.end()) {
+            WARN("model {} is already registered", config->_modelName);
+            continue;
+        }
+        if (_llmManager.isModelAvailable(config->_modelName)) {
+            WARN("model {} is already available", config->_modelName);
+            continue;
+        }
+        registeredModels.insert(config->_modelName);
 
-        if (!_llmManager.registerProvider("deepseek-v4-flash",
+        std::unique_ptr<LLMProvider> provider;
+        if (auto remote = std::dynamic_pointer_cast<RemoteConfig>(config)) {
+            // 云端模型: 按 provider 选择对应实现
+            if (remote->_provider == "gemini") {
+                provider = std::make_unique<GeminiProvider>();
+            } else if (remote->_provider == "chatgpt") {
+                provider = std::make_unique<ChatGPTProvider>();
+            } else {
+                provider = std::make_unique<DeepSeekProvider>();
+            }
+        } else if (std::dynamic_pointer_cast<OllamaConfig>(config)) {
+            provider = std::make_unique<OllamaLLMProvider>();
+        } else {
+            WARN("unknown config type, skip model {}", config->_modelName);
+            continue;
+        }
+
+        if (!_llmManager.registerProvider(config->_modelName,
                                           std::move(provider))) {
-            ERR("register deepseek-v4-flash model failed");
+            ERR("register model {} failed", config->_modelName);
             return false;
         }
-        INFO("register deepseek-v4-flash model");
-    }
-
-    // 使用unordered_set 存储已注册的模型名称
-    std::unordered_set<std::string> registeredModels;
-    registeredModels.insert("deepseek-v4-flash");
-
-    // 接下来循环注册用户传入的模型
-    for (auto &config : configMap) {
-        auto provider = std::make_unique<OllamaLLMProvider>();
-        auto configPtr = std::dynamic_pointer_cast<OllamaConfig>(config);
-        if (configPtr != nullptr) {
-            // 若模型名称已注册，则跳过
-            if (registeredModels.find(configPtr->_modelName) !=
-                registeredModels.end()) {
-                WARN("model {} is already registered", configPtr->_modelName);
-                continue;
-            }
-            registeredModels.insert(configPtr->_modelName);
-
-            if (_llmManager.isModelAvailable(configPtr->_modelName)) {
-                WARN("model {} is already available", configPtr->_modelName);
-                continue;
-            }
-            if (!_llmManager.registerProvider(configPtr->_modelName,
-                                              std::move(provider))) {
-                ERR("register user's model {} failed", configPtr->_modelName);
-                return false;
-            }
-            INFO("register user's model success: {}", configPtr->_modelName);
-        }
+        INFO("register model success: {}", config->_modelName);
     }
     return true;
 }
@@ -65,22 +70,17 @@ bool ChatSDK::registerModelList(
 bool ChatSDK::initModelList(
     const std::vector<std::shared_ptr<Config>> &configMap) {
     for (auto &model : configMap) {
-        if (model != nullptr) {
-
-            if (model->_modelName == "deepseek-v4-flash") {
-                auto configPtr = std::make_shared<RemoteConfig>();
-                configPtr->_modelName = model->_modelName;
-                configPtr->_apiKey = std::getenv("DEEPSEEK_API_KEY");
-                initRemoteModel(configPtr);
-            } else if (auto configPtr =
-                           std::dynamic_pointer_cast<OllamaConfig>(model)) {
-                // 若模型配置为Ollama模型，则初始化模型信息
-                initOllamaModel(configPtr);
-            } else if (auto configPtr =
-                           std::dynamic_pointer_cast<RemoteConfig>(model)) {
-                // 若模型配置为Remote模型，则初始化模型信息
-                initRemoteModel(configPtr);
-            }
+        if (model == nullptr) {
+            continue;
+        }
+        if (auto configPtr =
+                std::dynamic_pointer_cast<OllamaConfig>(model)) {
+            // 本地 Ollama 模型
+            initOllamaModel(configPtr);
+        } else if (auto configPtr =
+                       std::dynamic_pointer_cast<RemoteConfig>(model)) {
+            // 云端模型
+            initRemoteModel(configPtr);
         }
     }
     return true;
@@ -96,15 +96,30 @@ bool ChatSDK::initRemoteModel(const std::shared_ptr<RemoteConfig> &config) {
         WARN("model {} is already available", config->_modelName);
         return false;
     }
+    // API Key: 配置条目 api_key 优先, 为空时回退对应环境变量
+    auto env = [](const char *name) {
+        const char *value = std::getenv(name);
+        return value == nullptr ? std::string() : std::string(value);
+    };
+    std::string apiKey = config->_apiKey;
+    if (apiKey.empty()) {
+        if (config->_provider == "gemini") {
+            apiKey = env("GEMINI_API_KEY");
+        } else if (config->_provider == "chatgpt") {
+            apiKey = env("CHATGPT_API_KEY");
+            if (apiKey.empty()) {
+                apiKey = env("OPENAI_API_KEY");
+            }
+        } else {
+            apiKey = env("DEEPSEEK_API_KEY");
+        }
+    }
     std::map<std::string, std::string> params;
     params["model"] = config->_modelName;
-    params["temperature"] = std::to_string(config->_temperature).empty()
-                                ? "0.7"
-                                : std::to_string(config->_temperature);
-    params["max_tokens"] = std::to_string(config->_maxTokens).empty()
-                               ? "2048"
-                               : std::to_string(config->_maxTokens);
-    params["api_key"] = config->_apiKey;
+    params["temperature"] = std::to_string(config->_temperature);
+    params["max_tokens"] = std::to_string(config->_maxTokens);
+    params["api_key"] = apiKey;
+    params["model_desc"] = config->_modelDesc;
     if (!_llmManager.initModel(config->_modelName, params)) {
         ERR("init model {} failed", config->_modelName);
         return false;

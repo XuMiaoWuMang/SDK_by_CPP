@@ -15,17 +15,22 @@ bool GeminiProvider::initModel(
     }
     _api_key = it->second;
     it = configMap.find("base_url");
-    if (it == configMap.end()) {
-        ERR("base_url is not found in configMap");
-        return false;
+    if (it != configMap.end()) {
+        _endpoint = it->second;
+    } else {
+        _endpoint = "https://generativelanguage.googleapis.com";
     }
-    _endpoint = it->second;
     it = configMap.find("model_name");
-    if (it == configMap.end()) {
-        ERR("model_name is not found in configMap");
-        return false;
+    if (it != configMap.end()) {
+        _modelName = it->second;
+    } else {
+        it = configMap.find("model");
+        _modelName = (it != configMap.end()) ? it->second : "gemini-3.5-flash";
     }
-    _modelName = it->second;
+    it = configMap.find("model_desc");
+    if (it != configMap.end()) {
+        _modelDesc = it->second;
+    }
     _isAvailable = true;
     INFO("GeminiProvider initModel success, endpoint: {}", _endpoint);
     return true;
@@ -34,9 +39,12 @@ bool GeminiProvider::initModel(
 bool GeminiProvider::isAvailable() const { return _isAvailable; }
 // 获取模型名称
 std::string GeminiProvider::GetModelName() const { return _modelName; }
-// 获取模型描述
+// 获取模型描述: 配置 desc 优先, 空时使用默认文案
 std::string GeminiProvider::GetModelDesc() const {
-    return "由微软公司打造的⼀款实用性强、中⽂优化的通用对话助⼿, "
+    if (!_modelDesc.empty()) {
+        return _modelDesc;
+    }
+    return "由谷歌公司打造的⼀款实用性强、中⽂优化的通用对话助⼿, "
            "适合日常问答与创作。";
 }
 // 发送消息 - 全量返回

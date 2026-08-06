@@ -8,13 +8,13 @@ class ServerConfig {
     std::string server_ip = "0.0.0.0";
     int server_port = 8080;
 
-    std::string deepseek_model_name = "deepseek-v4-flash";
-    std::string deepseek_api_key;
-    std::string gemini_model_name = "gemini-3.5-flash";
-    std::string gemini_api_key;
-    std::string openai_model_name = "gpt-3.5-turbo";
-    std::string openai_api_key;
+    // 数据目录 (相对路径锚定可执行文件上一级) 与解析后的数据库完整路径
+    std::string data_dir = "data";
+    std::string db_path = "chatDB.db";
 
+    // 云端模型 (deepseek / gemini / chatgpt), 每条目含 _provider 与 _apiKey
+    std::vector<chat_sdk::RemoteConfig> remote_configs;
+    // 本地 Ollama 模型
     std::vector<chat_sdk::OllamaConfig> ollama_configs;
 
     double temperature = 0.7; // 温度

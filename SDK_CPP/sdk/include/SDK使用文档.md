@@ -64,9 +64,15 @@ struct Config {
 
 ```cpp
 struct RemoteConfig : Config {
-    std::string _apiKey; // API key
+    std::string _apiKey;    // API key
+    std::string _provider;  // 模型提供方: deepseek / gemini / chatgpt
 };
 ```
+
+说明：
+- `initLLMManager` 按 `_provider` 实例化对应 Provider（DeepSeekProvider / GeminiProvider / ChatGPTProvider），同一 provider 可注册多个不同 `_modelName` 的模型
+- API Key 解析规则：`_apiKey` 非空时优先使用，为空时自动回退环境变量（deepseek→DEEPSEEK_API_KEY，gemini→GEMINI_API_KEY，chatgpt→CHATGPT_API_KEY/OPENAI_API_KEY）
+- 模型描述：`_modelDesc` 非空时展示于模型列表，为空时使用 Provider 默认文案
 
 ### 2.4 OllamaConfig —— 本地 Ollama 模型配置
 
@@ -118,6 +124,7 @@ struct SessionInfo {
 
 | 方法 | 参数 | 返回值 | 说明 |
 |---|---|---|---|
+| 构造函数 | `const std::string &dbPath = "chatDB.db"` | - | 指定数据库文件路径（SQLite），可传完整路径（含目录） |
 | `initLLMManager` | `const std::vector<std::shared_ptr<Config>> &configMap` | bool | 初始化模型管理器，注册并初始化所有模型；成功返回 true |
 | `createSession` | `const std::string &modelName` | std::string | 创建会话；返回会话 ID，失败返回空串 |
 | `deleteSession` | `const std::string &sessionId` | bool | 删除会话；成功返回 true |

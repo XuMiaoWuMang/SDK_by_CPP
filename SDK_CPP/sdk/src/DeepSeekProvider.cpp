@@ -26,7 +26,13 @@ bool DeepSeekProvider::initModel(
     if (it != configMap.end()) {
         _modelName = it->second;
     } else {
-        _modelName = "deepseek-v4-flash";
+        it = configMap.find("model");
+        _modelName = (it != configMap.end()) ? it->second : "deepseek-v4-flash";
+    }
+
+    it = configMap.find("model_desc");
+    if (it != configMap.end()) {
+        _modelDesc = it->second;
     }
 
     _isAvailable = true;
@@ -37,8 +43,11 @@ bool DeepSeekProvider::initModel(
 bool DeepSeekProvider::isAvailable() const { return _isAvailable; }
 // 获取模型名称
 std::string DeepSeekProvider::GetModelName() const { return _modelName; }
-// 获取模型描述
+// 获取模型描述: 配置 desc 优先, 空时使用默认文案
 std::string DeepSeekProvider::GetModelDesc() const {
+    if (!_modelDesc.empty()) {
+        return _modelDesc;
+    }
     return "由深度求索公司打造的⼀款实用性强、中⽂优化的通用对话助⼿, "
            "适合日常问答与创作。";
 }

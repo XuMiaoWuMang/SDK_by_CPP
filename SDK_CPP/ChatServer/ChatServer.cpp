@@ -6,41 +6,28 @@
 #include <sstream>
 namespace chat_server {
 
-ChatServer::ChatServer(const ServerConfig &config) { // 模型的配置数组
-    _chat_sdk = std::make_shared<chat_sdk::ChatSDK>();
+ChatServer::ChatServer(const ServerConfig &config) {
+    _chat_sdk = std::make_shared<chat_sdk::ChatSDK>(config.db_path);
 
-    // deepseek远端模型
-    auto deepseekConfig = std::make_shared<chat_sdk::RemoteConfig>();
-    deepseekConfig->_apiKey = config.deepseek_api_key;
-    deepseekConfig->_modelName = "deepseek-v4-flash";
-    deepseekConfig->_temperature = config.temperature;
-    deepseekConfig->_maxTokens = config.max_tokens;
+    std::vector<std::shared_ptr<chat_sdk::Config>> configLists;
 
-    // ollama本地模型
-    // std::vector<std::shared_ptr<chat_sdk::OllamaConfig>> ollamaConfigs;
-    std::vector<std::shared_ptr<chat_sdk::Config>>configLists; 
-    for (auto &ollama : config.ollama_configs) {
+    // 云端模型: 全部来自配置 (SDK 按 _provider 实例化对应 Provider)
+    for (const auto &remote : config.remote_configs) {
+        configLists.push_back(std::make_shared<chat_sdk::RemoteConfig>(remote));
+    }
+
+    // 本地 Ollama 模型: 每模型独立温度与 max_tokens (来自配置文件)
+    for (const auto &ollama : config.ollama_configs) {
         auto ollamaConfig = std::make_shared<chat_sdk::OllamaConfig>();
         ollamaConfig->_modelName = ollama._modelName;
         ollamaConfig->_endpoint = ollama._endpoint;
-        ollamaConfig->_modelDesc =
-            ollama._modelDesc;
-        ollamaConfig->_temperature = config.temperature;
-        ollamaConfig->_maxTokens = config.max_tokens;
-        // ollamaConfigs.push_back(ollamaConfig);
+        ollamaConfig->_modelDesc = ollama._modelDesc;
+        ollamaConfig->_temperature = ollama._temperature;
+        ollamaConfig->_maxTokens = ollama._maxTokens;
         configLists.push_back(ollamaConfig);
-
     }
-    configLists.push_back(deepseekConfig);
 
-
-    // std::vector<std::shared_ptr<chat_sdk::Config>> configLists = {
-    //     deepseekConfig,
-    //     ollamaConfigs.begin(),
-    //     ollamaConfigs.end()};
-
-    if (!_chat_sdk->initLLMManager(configLists)) // 初始化LLMManager
-    {
+    if (!_chat_sdk->initLLMManager(configLists)) { // 初始化LLMManager
         ERR("initLLMManager failed !!!");
     }
 

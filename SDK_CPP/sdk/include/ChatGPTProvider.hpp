@@ -22,5 +22,8 @@ class ChatGPTProvider : public LLMProvider {
         const std::vector<Message> &messages,
         const std::map<std::string, std::string> &params,
         std::function<void(const std::string &, bool)> callback) override;
+
+  private:
+    std::string _modelDesc; // 模型描述 (配置 desc, 空时用默认文案)
 };
 } // namespace chat_sdk
